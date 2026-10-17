@@ -1,0 +1,19 @@
+[project]
+name = "sep26-bmlops-movie-reco"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Uwe Rosner", email = "oscottmusic@posteo.de" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "scikit-learn==1.4.2",
+]
+
+[project.scripts]
+sep26-bmlops-movie-reco = "sep26_bmlops_movie_reco:main"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
