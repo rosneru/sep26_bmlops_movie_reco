@@ -5,7 +5,9 @@
       "Read(//home/uro/.vscode-server/data/Machine/**)",
       "Read(//home/uro/.vscode-server/extensions/**)",
       "Read(//mnt/c/Users/uwero/AppData/Roaming/Code/User/**)",
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "Bash(git status *)",
+      "Read(//home/uro/.config/**)"
     ]
   }
 }

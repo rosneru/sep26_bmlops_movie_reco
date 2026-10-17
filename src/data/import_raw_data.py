@@ -1,6 +1,7 @@
-import requests
-import os
 import logging
+import os
+
+import requests
 from check_structure import check_existing_file, check_existing_folder
 
 
@@ -14,7 +15,9 @@ def import_raw_data(raw_data_relative_path, filenames, bucket_folder_url):
         output_file = os.path.join(raw_data_relative_path, filename)
         if check_existing_file(output_file):
             object_url = input_file
-            print(f'downloading {input_file} as {os.path.basename(output_file)}')
+            print(
+                f'downloading {input_file} as {os.path.basename(output_file)}'
+            )
             response = requests.get(object_url)
             if response.status_code == 200:
                 # Process the response content as needed
@@ -23,7 +26,10 @@ def import_raw_data(raw_data_relative_path, filenames, bucket_folder_url):
                 text_file.write(content.encode('utf-8'))
                 text_file.close()
             else:
-                print(f'Error accessing the object {input_file}:', response.status_code)
+                print(
+                    f'Error accessing the object {input_file}:',
+                    response.status_code,
+                )
 
 
 def main(
