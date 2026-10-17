@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -v '^uv.lock$')",
+      "Read(//home/uro/.vscode-server/data/Machine/**)",
+      "Read(//home/uro/.vscode-server/extensions/**)",
+      "Read(//mnt/c/Users/uwero/AppData/Roaming/Code/User/**)",
+      "Bash(uv run *)"
+    ]
+  }
+}
