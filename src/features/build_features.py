@@ -1,6 +1,6 @@
-import pandas as pd
-from sklearn.preprocessing import LabelEncoder
 import os
+
+import pandas as pd
 
 
 def read_ratings(ratings_csv, data_dir='data/raw') -> pd.DataFrame:
@@ -19,9 +19,6 @@ def read_ratings(ratings_csv, data_dir='data/raw') -> pd.DataFrame:
         "userId", "movieId", "rating" and "timestamp".
     """
     data = pd.read_csv(os.path.join(data_dir, ratings_csv))
-
-    temp = pd.DataFrame(LabelEncoder().fit_transform(data['movieId']))
-    data['movieId'] = temp
     return data
 
 
