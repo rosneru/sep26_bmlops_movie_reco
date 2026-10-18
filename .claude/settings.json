@@ -7,7 +7,10 @@
       "Read(//mnt/c/Users/uwero/AppData/Roaming/Code/User/**)",
       "Bash(uv run *)",
       "Bash(git status *)",
-      "Read(//home/uro/.config/**)"
+      "Read(//home/uro/.config/**)",
+      "Bash(uv run -q python -c ' *)",
+      "Read(//tmp/**)",
+      "Bash(/home/uro/repos/sep26_bmlops_movie_reco/.venv/bin/python -c \"import config, data, features; print\\(config.__file__\\); print\\(data.__file__\\)\")"
     ]
   }
 }
