@@ -2,6 +2,7 @@ import os
 import pickle
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -45,6 +46,12 @@ app = FastAPI(
 # data model for input query
 class PredictRequest(BaseModel):
     user_ids: list[int] = Field(min_length=1)
+    seed: int | None = Field(
+        default=None,
+        ge=0,
+        description='Makes the recommendations reproducible. Without a seed, '
+        'they vary from call to call.',
+    )
 
     model_config = {
         'json_schema_extra': {
@@ -67,12 +74,18 @@ def predict(request: PredictRequest):
     users = user_matrix.loc[request.user_ids]
     _, indices = model.kneighbors(users)
 
-    return {
-        'recommendations': [
-            {
-                'user_id': user_id,
-                'movie_ids': movie_ids[row[:N_RECOMMENDATIONS]].tolist(),
-            }
-            for user_id, row in zip(request.user_ids, indices)
-        ]
-    }
+    recommendations = []
+    for user_id, row in zip(request.user_ids, indices):
+        # Many movies share the same genres and thus have the same distance,
+        # so choose randomly among the nearest neighbors. Seeding with
+        # (seed, user_id) makes the result of each user reproducible,
+        # independent of the other user ids in the request.
+        rng = np.random.default_rng(
+            None if request.seed is None else [request.seed, user_id]
+        )
+        selection = rng.choice(row, size=N_RECOMMENDATIONS, replace=False)
+        recommendations.append(
+            {'user_id': user_id, 'movie_ids': movie_ids[selection].tolist()}
+        )
+
+    return {'recommendations': recommendations}

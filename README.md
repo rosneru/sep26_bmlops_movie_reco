@@ -104,4 +104,4 @@ curl -X POST localhost:8000/predict \
      -d '{"user_ids": [21525]}'
 ```
 
-The response contains 10 recommended `movieId`s per user. Only users who rated a movie in the parts `1..split.current_part` are known. Others return `404`. For example, user `21525` is known from part 1 on, while user `1` only appears in later parts.
+The response contains 10 recommended `movieId`s per user. They are chosen randomly from the 20 nearest movies and vary from call to call. Add a seed (e.g. `"seed": 42`) to get reproducible results. Only users who rated a movie in the parts `1..split.current_part` are known. Others return `404`. For example, user `21525` is known from part 1 on, while user `1` only appears in later parts.
