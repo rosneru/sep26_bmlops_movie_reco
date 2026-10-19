@@ -1,0 +1,78 @@
+import os
+import pickle
+from pathlib import Path
+
+import pandas as pd
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+# Paths can be overridden via environment variables (e.g. inside a Docker
+# container). The defaults point to the project directory.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MODEL_PATH = Path(os.getenv('MODEL_PATH', PROJECT_ROOT / 'models' / 'model.pkl'))
+USER_MATRIX_PATH = Path(
+    os.getenv('USER_MATRIX_PATH', PROJECT_ROOT / 'data/processed/user_matrix.csv')
+)
+MOVIE_MATRIX_PATH = Path(
+    os.getenv('MOVIE_MATRIX_PATH', PROJECT_ROOT / 'data/processed/movie_matrix.csv')
+)
+
+N_RECOMMENDATIONS = 10
+
+# Loading the trained model and the matrices once at startup
+try:
+    with open(MODEL_PATH, 'rb') as f:
+        model = pickle.load(f)
+
+    # Genre profile of each user, indexed by userId
+    user_matrix = pd.read_csv(USER_MATRIX_PATH, index_col='userId')
+
+    # kneighbors() returns row positions in the movie matrix the model was
+    # trained on. This array maps those positions back to movieIds.
+    movie_ids = pd.read_csv(MOVIE_MATRIX_PATH, usecols=['movieId'])[
+        'movieId'
+    ].to_numpy()
+except FileNotFoundError as e:
+    raise RuntimeError(f'Required file not found: {e.filename}') from e
+
+app = FastAPI(
+    title='Movie Recommendation API',
+    description='Recommends movies to users based on their genre preferences.',
+    version='0.1.0',
+)
+
+
+# data model for input query
+class PredictRequest(BaseModel):
+    user_ids: list[int] = Field(min_length=1)
+
+    model_config = {
+        'json_schema_extra': {
+            'examples': [
+                {
+                    'user_ids': [1, 2, 3],
+                }
+            ]
+        }
+    }
+
+
+# prediction endpoint
+@app.post('/predict')
+def predict(request: PredictRequest):
+    unknown_ids = [i for i in request.user_ids if i not in user_matrix.index]
+    if unknown_ids:
+        raise HTTPException(status_code=404, detail=f'Unknown user ids: {unknown_ids}')
+
+    users = user_matrix.loc[request.user_ids]
+    _, indices = model.kneighbors(users)
+
+    return {
+        'recommendations': [
+            {
+                'user_id': user_id,
+                'movie_ids': movie_ids[row[:N_RECOMMENDATIONS]].tolist(),
+            }
+            for user_id, row in zip(request.user_ids, indices)
+        ]
+    }
