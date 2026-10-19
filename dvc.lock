@@ -5,8 +5,8 @@ stages:
     deps:
     - path: src/config.py
       hash: md5
-      md5: 519429704ced6c95e5255c5d5891f03c
-      size: 216
+      md5: 29b08b6d3fcf7f0a84c9023d34402e18
+      size: 369
     - path: src/data/import_raw_data.py
       hash: md5
       md5: d50a4a7299ee338dcdb4cddd5e2d31ff
@@ -20,3 +20,59 @@ stages:
       hash: md5
       md5: b5295ddb3165cd002297e9ce18adea47
       size: 533444411
+  split_data:
+    cmd: python src/data/split_data.py --n-parts 8
+    deps:
+    - path: data/raw/ratings.csv
+      hash: md5
+      md5: b5295ddb3165cd002297e9ce18adea47
+      size: 533444411
+    - path: src/config.py
+      hash: md5
+      md5: 29b08b6d3fcf7f0a84c9023d34402e18
+      size: 369
+    - path: src/data/split_data.py
+      hash: md5
+      md5: dc671740fd571fcb2f7017d620ae9808
+      size: 2100
+    params:
+      params.yaml:
+        split.n_parts: 8
+    outs:
+    - path: data/interim/ratings_parts
+      hash: md5
+      md5: be5021d738af5da1b5e42bbc17be6624.dir
+      size: 513444371
+      nfiles: 8
+  build_features:
+    cmd: python src/features/build_features.py --current-part 1
+    deps:
+    - path: data/interim/ratings_parts
+      hash: md5
+      md5: be5021d738af5da1b5e42bbc17be6624.dir
+      size: 513444371
+      nfiles: 8
+    - path: data/raw/movies.csv
+      hash: md5
+      md5: 23b066571ca80fc78947840b05ac57b4
+      size: 1397542
+    - path: src/config.py
+      hash: md5
+      md5: 29b08b6d3fcf7f0a84c9023d34402e18
+      size: 369
+    - path: src/features/build_features.py
+      hash: md5
+      md5: 1af01aa458fe3045c1a5662ea9458dce
+      size: 3363
+    params:
+      params.yaml:
+        split.current_part: 1
+    outs:
+    - path: data/processed/movie_matrix.csv
+      hash: md5
+      md5: 39e91271c61c85ecdb840711c9936641
+      size: 1252457
+    - path: data/processed/user_matrix.csv
+      hash: md5
+      md5: dfcb7d739174ab52ccd79137e4a83dfd
+      size: 11205348

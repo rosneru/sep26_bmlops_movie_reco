@@ -7,3 +7,27 @@ stages:
     outs:
       - data/raw/movies.csv
       - data/raw/ratings.csv
+
+  split_data:
+    cmd: python src/data/split_data.py --n-parts ${split.n_parts}
+    deps:
+      - src/data/split_data.py
+      - src/config.py
+      - data/raw/ratings.csv
+    params:
+      - split.n_parts
+    outs:
+      - data/interim/ratings_parts
+
+  build_features:
+    cmd: python src/features/build_features.py --current-part ${split.current_part}
+    deps:
+      - src/features/build_features.py
+      - src/config.py
+      - data/interim/ratings_parts
+      - data/raw/movies.csv
+    params:
+      - split.current_part
+    outs:
+      - data/processed/user_matrix.csv
+      - data/processed/movie_matrix.csv

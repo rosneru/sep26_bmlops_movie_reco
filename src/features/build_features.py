@@ -1,9 +1,18 @@
+import logging
 import os
 
+import click
 import pandas as pd
 
+from config import (
+    PROCESSED_DATA_DIR,
+    RATINGS_PART_FILENAME,
+    RATINGS_PARTS_DIR,
+    RAW_DATA_DIR,
+)
 
-def read_ratings(ratings_csv, data_dir='data/raw') -> pd.DataFrame:
+
+def read_ratings(ratings_csv, data_dir=RAW_DATA_DIR) -> pd.DataFrame:
     """
     Reads a ratings.csv from the data/raw folder.
 
@@ -22,7 +31,7 @@ def read_ratings(ratings_csv, data_dir='data/raw') -> pd.DataFrame:
     return data
 
 
-def read_movies(movies_csv, data_dir='data/raw') -> pd.DataFrame:
+def read_movies(movies_csv, data_dir=RAW_DATA_DIR) -> pd.DataFrame:
     """
     Reads a movies.csv from the data/raw folder.
 
@@ -48,13 +57,18 @@ def read_movies(movies_csv, data_dir='data/raw') -> pd.DataFrame:
 
 
 def create_user_matrix(ratings, movies):
-    # merge the 2 tables together
-    movie_ratings = ratings.merge(movies, on='movieId', how='inner')
+    # Only keep which user rated which movie and the genres of each movie.
+    # Note: "rating" and "timestamp" are not used by the user matrix.
+    # Dropping them (and storing the genres as uint8) before the merge keeps
+    # the memory usage low for millions of ratings.
+    genres = movies.drop(columns=['movieId', 'title']).astype('uint8')
+    movies = pd.concat([movies[['movieId']], genres], axis=1)
 
-    # Drop useless features
-    movie_ratings = movie_ratings.drop(
-        ['movieId', 'timestamp', 'title', 'rating'], axis=1
+    # merge the 2 tables together
+    movie_ratings = ratings[['userId', 'movieId']].merge(
+        movies, on='movieId', how='inner'
     )
+    movie_ratings = movie_ratings.drop('movieId', axis=1)
 
     # Calculate user_matrix
     user_matrix = movie_ratings.groupby('userId').agg(
@@ -64,11 +78,34 @@ def create_user_matrix(ratings, movies):
     return user_matrix
 
 
-if __name__ == '__main__':
+@click.command()
+@click.option('--current-part', type=click.IntRange(min=1), required=True)
+def main(current_part):
+    """Build user and movie matrix from the rating parts 1..current_part."""
+    logger = logging.getLogger(__name__)
+
     # read user_ratings and movies tables
-    user_ratings = read_ratings('ratings.csv')
+    user_ratings = pd.concat(
+        [
+            read_ratings(RATINGS_PART_FILENAME.format(number), RATINGS_PARTS_DIR)
+            for number in range(1, current_part + 1)
+        ],
+        ignore_index=True,
+    )
     movies = read_movies('movies.csv')
+    logger.info(f'Using {len(user_ratings)} ratings from parts 1..{current_part}')
+
     user_matrix = create_user_matrix(user_ratings, movies)
     movies = movies.drop('title', axis=1)
-    movies.to_csv('data/processed/movie_matrix.csv', index=False)
-    user_matrix.to_csv('data/processed/user_matrix.csv')
+
+    PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    movies.to_csv(PROCESSED_DATA_DIR / 'movie_matrix.csv', index=False)
+    user_matrix.to_csv(PROCESSED_DATA_DIR / 'user_matrix.csv')
+    logger.info(f'Built user matrix for {len(user_matrix)} users')
+
+
+if __name__ == '__main__':
+    log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    logging.basicConfig(level=logging.INFO, format=log_fmt)
+
+    main()

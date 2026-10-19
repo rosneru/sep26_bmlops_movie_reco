@@ -1,0 +1,6 @@
+split:
+  # Number of chronological parts the ratings are split into
+  n_parts: 8
+  # Ratings of the parts 1..current_part are used to build the features.
+  # Increase it to simulate newly arriving data.
+  current_part: 1
