@@ -1,0 +1,22 @@
+schema: '2.0'
+stages:
+  import_raw_data:
+    cmd: python src/data/import_raw_data.py
+    deps:
+    - path: src/config.py
+      hash: md5
+      md5: 519429704ced6c95e5255c5d5891f03c
+      size: 216
+    - path: src/data/import_raw_data.py
+      hash: md5
+      md5: d50a4a7299ee338dcdb4cddd5e2d31ff
+      size: 2177
+    outs:
+    - path: data/raw/movies.csv
+      hash: md5
+      md5: 23b066571ca80fc78947840b05ac57b4
+      size: 1397542
+    - path: data/raw/ratings.csv
+      hash: md5
+      md5: b5295ddb3165cd002297e9ce18adea47
+      size: 533444411
