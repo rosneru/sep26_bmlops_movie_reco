@@ -94,6 +94,10 @@ The API needs `models/model.pkl` and the files in `data/processed/` (see above).
 uv run uvicorn predict.predict:app --reload
 ```
 
+There is a `Makefile` provided that encapsulates this call. Type `make start-api` to run it.
+
+Stop the API by pressing `<Ctrl + c>` in the terminal where it runs.
+
 **In the browser:** Open <http://localhost:8000/docs>, expand `POST /predict`, click *Try it out*, enter some user ids and click *Execute*.
 
 **With curl** (in a second terminal):
@@ -105,3 +109,5 @@ curl -X POST localhost:8000/predict \
 ```
 
 The response contains 10 recommended `movieId`s per user. They are chosen randomly from the 20 nearest movies and vary from call to call. Add a seed (e.g. `"seed": 42`) to get reproducible results. Only users who rated a movie in the parts `1..split.current_part` are known. Others return `404`. For example, user `21525` is known from part 1 on, while user `1` only appears in later parts.
+
+With the provided `Makefile` you can run this call by typing: `make test-api`.
