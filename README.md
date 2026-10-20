@@ -111,3 +111,41 @@ curl -X POST localhost:8000/predict \
 The response contains 10 recommended `movieId`s per user. They are chosen randomly from the 20 nearest movies and vary from call to call. Add a seed (e.g. `"seed": 42`) to get reproducible results. Only users who rated a movie in the parts `1..split.current_part` are known. Others return `404`. For example, user `21525` is known from part 1 on, while user `1` only appears in later parts.
 
 With the provided `Makefile` you can run this call by typing: `make test-api`.
+
+## Testing the predict API Dockerfile
+
+While the test command remains the same (`curl -X ...`) the API docker container can be started with:
+
+```bash
+docker run --rm -p 8000:8000 movie-reco-api
+```
+
+## Testing the predict API with Docker compose
+
+### Start the project (currently the predict API)
+
+**NOTE:** `docker compose up` and `make run-api` cannot run at the same time because both use port 8000.
+
+```bash
+docker compose up -d --build
+```
+
+Or, call the `Makefile` with
+
+```bash
+make start-project
+```
+Again, testing can be done with `make test-api`
+
+### Stop the project (currently the predict API)
+
+```bash
+docker compose down
+```
+
+Or, call the `Makefile` with
+
+```bash
+make stop-project
+```
+Again, testing can be done with `make test-api`
