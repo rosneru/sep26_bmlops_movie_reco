@@ -5,10 +5,12 @@ import click
 import pandas as pd
 
 from config import (
+    MOVIE_MATRIX_PATH,
     PROCESSED_DATA_DIR,
     RATINGS_PART_FILENAME,
     RATINGS_PARTS_DIR,
     RAW_DATA_DIR,
+    USER_MATRIX_PATH,
 )
 
 
@@ -87,20 +89,24 @@ def main(current_part):
     # read user_ratings and movies tables
     user_ratings = pd.concat(
         [
-            read_ratings(RATINGS_PART_FILENAME.format(number), RATINGS_PARTS_DIR)
+            read_ratings(
+                RATINGS_PART_FILENAME.format(number), RATINGS_PARTS_DIR
+            )
             for number in range(1, current_part + 1)
         ],
         ignore_index=True,
     )
     movies = read_movies('movies.csv')
-    logger.info(f'Using {len(user_ratings)} ratings from parts 1..{current_part}')
+    logger.info(
+        f'Using {len(user_ratings)} ratings from parts 1..{current_part}'
+    )
 
     user_matrix = create_user_matrix(user_ratings, movies)
     movies = movies.drop('title', axis=1)
 
     PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    movies.to_csv(PROCESSED_DATA_DIR / 'movie_matrix.csv', index=False)
-    user_matrix.to_csv(PROCESSED_DATA_DIR / 'user_matrix.csv')
+    movies.to_csv(MOVIE_MATRIX_PATH, index=False)
+    user_matrix.to_csv(USER_MATRIX_PATH)
     logger.info(f'Built user matrix for {len(user_matrix)} users')
 
 

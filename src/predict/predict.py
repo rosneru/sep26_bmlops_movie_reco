@@ -7,16 +7,13 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+import config
+
 # Paths can be overridden via environment variables (e.g. inside a Docker
-# container). The defaults point to the project directory.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MODEL_PATH = Path(os.getenv('MODEL_PATH', PROJECT_ROOT / 'models' / 'model.pkl'))
-USER_MATRIX_PATH = Path(
-    os.getenv('USER_MATRIX_PATH', PROJECT_ROOT / 'data/processed/user_matrix.csv')
-)
-MOVIE_MATRIX_PATH = Path(
-    os.getenv('MOVIE_MATRIX_PATH', PROJECT_ROOT / 'data/processed/movie_matrix.csv')
-)
+# container). The defaults from config.py point to the project directory.
+MODEL_PATH = Path(os.getenv('MODEL_PATH', config.MODEL_PATH))
+USER_MATRIX_PATH = Path(os.getenv('USER_MATRIX_PATH', config.USER_MATRIX_PATH))
+MOVIE_MATRIX_PATH = Path(os.getenv('MOVIE_MATRIX_PATH', config.MOVIE_MATRIX_PATH))
 
 N_RECOMMENDATIONS = 10
 

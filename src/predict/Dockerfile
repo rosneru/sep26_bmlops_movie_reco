@@ -14,9 +14,10 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-default-groups --no-install-project --no-cache
 
-# Mirror the project layout, so the default paths in predict.py work
+# Mirror the project layout, so the default paths from config.py work
 COPY models/model.pkl models/
 COPY data/processed/user_matrix.csv data/processed/movie_matrix.csv data/processed/
+COPY src/config.py src/
 COPY src/predict/predict.py src/predict/
 
 # Use the virtual environment created by 'uv sync'
