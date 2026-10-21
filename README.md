@@ -91,7 +91,7 @@ Since `params.yaml` and `dvc.lock` are versioned in Git, every commit documents 
 The API needs `models/model.pkl` and the files in `data/processed/` (see above). Start it with:
 
 ```bash
-uv run uvicorn predict.predict:app --reload
+uv run uvicorn predict_service.predict:app --reload
 ```
 
 There is a `Makefile` provided that encapsulates this call. Type `make start-api` to run it.

@@ -14,7 +14,7 @@ services:
   predict:
     build:
       context: .
-      dockerfile: src/predict/Dockerfile
+      dockerfile: src/predict_service/Dockerfile
     expose:
       - "8000"
     deploy:

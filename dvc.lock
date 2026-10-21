@@ -1,13 +1,13 @@
 schema: '2.0'
 stages:
   import_raw_data:
-    cmd: python src/data/import_raw_data.py
+    cmd: python src/data_collection_service/import_raw_data.py
     deps:
     - path: src/config.py
       hash: md5
       md5: 29b08b6d3fcf7f0a84c9023d34402e18
       size: 369
-    - path: src/data/import_raw_data.py
+    - path: src/data_collection_service/import_raw_data.py
       hash: md5
       md5: d50a4a7299ee338dcdb4cddd5e2d31ff
       size: 2177
@@ -21,7 +21,7 @@ stages:
       md5: b5295ddb3165cd002297e9ce18adea47
       size: 533444411
   split_data:
-    cmd: python src/data/split_data.py --n-parts 8
+    cmd: python src/data_collection_service/split_data.py --n-parts 8
     deps:
     - path: data/raw/ratings.csv
       hash: md5
@@ -31,7 +31,7 @@ stages:
       hash: md5
       md5: 29b08b6d3fcf7f0a84c9023d34402e18
       size: 369
-    - path: src/data/split_data.py
+    - path: src/data_collection_service/split_data.py
       hash: md5
       md5: dc671740fd571fcb2f7017d620ae9808
       size: 2100

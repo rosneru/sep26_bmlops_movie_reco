@@ -1,6 +1,6 @@
 # This must be called from the project root, because the image needs
 # 'uv.lock', 'models/' and 'data/processed/':
-#   docker build -f src/predict/Dockerfile -t movie-reco-api .
+#   docker build -f src/predict_service/Dockerfile -t movie-reco-api .
 FROM python:3.10-slim
 
 # uv is a single binary, copied from the official image
@@ -18,10 +18,10 @@ RUN uv sync --frozen --no-default-groups --no-install-project --no-cache
 COPY models/model.pkl models/
 COPY data/processed/user_matrix.csv data/processed/movie_matrix.csv data/processed/
 COPY src/config.py src/
-COPY src/predict/predict.py src/predict/
+COPY src/predict_service/predict.py src/predict_service/
 
 # Use the virtual environment created by 'uv sync'
 ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000
-CMD ["uvicorn", "predict.predict:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "predict_service.predict:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]
