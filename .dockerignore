@@ -1,0 +1,12 @@
+# Keeps the build context small. The Dockerfiles only copy single files from
+# 'models/', 'data/processed/' and 'src/', so everything else can stay out.
+.git
+.venv
+.dvc
+.claude
+.ruff_cache
+.env
+**/__pycache__
+data/raw
+data/interim
+notebooks

@@ -9,3 +9,13 @@ wheels/
 # Virtual environments
 .venv
 .claude/
+
+# Secrets (make_dataset.py loads a .env via python-dotenv)
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editor / OS
+.vscode/
+.DS_Store
