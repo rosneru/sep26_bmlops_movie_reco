@@ -94,7 +94,7 @@ The API needs `models/model.pkl` and the files in `data/processed/` (see above).
 uv run uvicorn predict_service.predict:app --app-dir src --reload
 ```
 
-There is a `Makefile` provided that encapsulates this call. Type `make start-api` to run it.
+There is a `Makefile` provided that encapsulates this call. Type `make run-api` to run it.
 
 Stop the API by pressing `<Ctrl + c>` in the terminal where it runs.
 
@@ -148,4 +148,3 @@ Or, call the `Makefile` with
 ```bash
 make stop-project
 ```
-Again, testing can be done with `make test-api`
