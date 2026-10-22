@@ -1,6 +1,6 @@
 stages:
   import_raw_data:
-    cmd: python src/data_collection_service/import_raw_data.py
+    cmd: PYTHONPATH=src python src/data_collection_service/import_raw_data.py
     deps:
       - src/data_collection_service/import_raw_data.py
       - src/config.py
@@ -9,7 +9,7 @@ stages:
       - data/raw/ratings.csv
 
   split_data:
-    cmd: python src/data_collection_service/split_data.py --n-parts ${split.n_parts}
+    cmd: PYTHONPATH=src python src/data_collection_service/split_data.py --n-parts ${split.n_parts}
     deps:
       - src/data_collection_service/split_data.py
       - src/config.py
@@ -20,7 +20,7 @@ stages:
       - data/interim/ratings_parts
 
   build_features:
-    cmd: python src/features/build_features.py --current-part ${split.current_part}
+    cmd: PYTHONPATH=src python src/features/build_features.py --current-part ${split.current_part}
     deps:
       - src/features/build_features.py
       - src/config.py

@@ -3184,7 +3184,7 @@ wheels = [
 [[package]]
 name = "sep26-bmlops-movie-reco"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 default-groups = ["dev", "dvc"]
 dependencies = [
     { name = "click" },

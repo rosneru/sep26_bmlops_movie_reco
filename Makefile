@@ -1,7 +1,7 @@
 .PHONY: run-api kill-api test-api
 
 run-api:
-	uv run uvicorn predict_service.predict:app --reload
+	uv run uvicorn predict_service.predict:app --app-dir src --reload
 
 run-api-container:
 	docker run --rm -p 8000:8000 movie-reco-api
