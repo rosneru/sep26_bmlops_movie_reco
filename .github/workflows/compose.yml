@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   compose:
-    name: Compose startup
+    name: Compose startup with synthetic data
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -26,6 +26,15 @@ jobs:
 
       - name: Validate Compose configuration
         run: docker compose config --quiet
+
+      - name: Generate synthetic inference data (TEMP)
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --mount type=bind,source="$GITHUB_WORKSPACE",target=/workspace \
+            --workdir /workspace \
+            python:3.10-slim \
+            python tests/fixtures/generate_inference_data.py
 
       - name: Build and start all services
         run: docker compose up -d --build --wait --wait-timeout 120
