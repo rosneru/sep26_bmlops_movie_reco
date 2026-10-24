@@ -18,8 +18,15 @@ dependencies = [
 ]
 
 [tool.uv]
+# The services are applications, not an installable package. They import
+# from src/ via PYTHONPATH=src (dvc.yaml) or --app-dir src (uvicorn).
+package = false
 # Installed by a plain 'uv sync', but left out of the API image
 default-groups = ["dev", "dvc"]
+
+[tool.pyright]
+# Lets Pylance resolve the imports from src/ (config, features, ...)
+extraPaths = ["src"]
 
 [tool.ruff.format]
 quote-style = "single"
