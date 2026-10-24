@@ -1,17 +1,17 @@
 stages:
   import_raw_data:
-    cmd: PYTHONPATH=src python src/data_collection_service/import_raw_data.py
+    cmd: PYTHONPATH=src python src/initial_data_import/import_raw_data.py
     deps:
-      - src/data_collection_service/import_raw_data.py
+      - src/initial_data_import/import_raw_data.py
       - src/config.py
     outs:
       - data/raw/movies.csv
       - data/raw/ratings.csv
 
   split_data:
-    cmd: PYTHONPATH=src python src/data_collection_service/split_data.py --n-parts ${split.n_parts}
+    cmd: PYTHONPATH=src python src/initial_data_import/split_data.py --n-parts ${split.n_parts}
     deps:
-      - src/data_collection_service/split_data.py
+      - src/initial_data_import/split_data.py
       - src/config.py
       - data/raw/ratings.csv
     params:

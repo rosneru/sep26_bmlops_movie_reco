@@ -10,7 +10,7 @@ wheels/
 .venv
 .claude/
 
-# Secrets (make_dataset.py loads a .env via python-dotenv)
+# Secrets (e.g. passwords and tokens for Docker Compose)
 .env
 
 # Jupyter
