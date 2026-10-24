@@ -2,15 +2,9 @@ import os
 from pathlib import Path
 
 import yaml
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import HTTPException
 
 import config
-
-DESCRIPTION = """
-Uploads the rating data part by part from the local machine to the DagsHub
-storage bucket, to simulate data that arrives over time.
-"""
 
 RATINGS_PARTS_DIR = Path(
     os.getenv('RATINGS_PARTS_DIR', config.RATINGS_PARTS_DIR)
@@ -23,69 +17,49 @@ PARAMS_PATH = Path(
 )
 
 
-def read_requested_part_from_params_file():
+def read_requested_up_to_from_params_file():
     """Return split.current_part from params.yaml."""
     with open(PARAMS_PATH) as f:
         return int(yaml.safe_load(f)['split']['current_part'])
 
 
-def get_requested_part_from_argument_or_file(
-    requested_part_arg: int | None,
+def get_requested_up_to_from_argument_or_file(
+    requested_up_to_arg: int | None,
 ) -> int:
-    if requested_part_arg is not None:
-        return requested_part_arg
+    if requested_up_to_arg is not None:
+        return requested_up_to_arg
 
     try:
-        requested_part = read_requested_part_from_params_file()
-        if requested_part < 1:
+        requested_up_to = read_requested_up_to_from_params_file()
+        if requested_up_to < 1:
             raise HTTPException(
                 status_code=500,
                 detail=(
-                    f'Invalid split.current_part={requested_part} in '
+                    f'Invalid split.current_part={requested_up_to} in '
                     f'{PARAMS_PATH} (must be >= 1). Fix params.yaml or pass '
-                    'requested_part in the request.'
+                    'requested_up_to in the request.'
                 ),
             )
-        return requested_part
+        return requested_up_to
     except (OSError, yaml.YAMLError, KeyError, TypeError, ValueError) as e:
         raise HTTPException(
             status_code=500,
             detail=(
-                f'No requested_part given and split.current_part could not be '
+                f'No requested_up_to given and split.current_part could not be '
                 f'determined from {PARAMS_PATH}: {type(e).__name__}: {e}'
             ),
         ) from e
 
 
-def ingest_up_to(requested_part_arg: int | None):
-    requested_part = get_requested_part_from_argument_or_file(
-        requested_part_arg
+def ingest_up_to(requested_up_to_arg: int | None):
+    requested_up_to = get_requested_up_to_from_argument_or_file(
+        requested_up_to_arg
     )
-    target = list(range(1, requested_part + 1))
+    target = list(range(1, requested_up_to + 1))
     part_files = sorted(RATINGS_PARTS_DIR.glob('ratings_*.csv'))
     return {
         'function': 'ingest_up_to',
-        'requested_part': requested_part,
-        'parts': part_files,
+        'requested_up_to': requested_up_to,
+        'requested_up_to_arg': requested_up_to_arg,
         'target': target,
     }
-
-
-api = FastAPI(title='Cloud Collection Service', description=DESCRIPTION)
-
-
-class IngestRequest(BaseModel):
-    requested_part: int | None = Field(
-        default=None,
-        ge=1,
-        description='After the call the bucket contains the parts '
-        '1..requested_part. Default: split.current_part from params.yaml.',
-    )
-
-    # Only documentation: example body for /docs, no effect on validation
-    model_config = {'json_schema_extra': {'examples': [{'requested_part': 2}]}}
-
-
-@api.post('/ingest')
-def ingest(request: IngestRequest | None = None):
-    return ingest_up_to(request.requested_part if request else None)
