@@ -76,3 +76,27 @@ stages:
       hash: md5
       md5: dfcb7d739174ab52ccd79137e4a83dfd
       size: 11205348
+  ingest:
+    cmd: mkdir -p data/ingested/ratings_parts && cp data/raw/movies.csv 
+      data/ingested/ && for i in $(seq -f %02g 1 1); do cp 
+      data/interim/ratings_parts/ratings_$i.csv data/ingested/ratings_parts/; 
+      done
+    deps:
+    - path: data/interim/ratings_parts
+      hash: md5
+      md5: be5021d738af5da1b5e42bbc17be6624.dir
+      size: 513444371
+      nfiles: 8
+    - path: data/raw/movies.csv
+      hash: md5
+      md5: 23b066571ca80fc78947840b05ac57b4
+      size: 1397542
+    params:
+      params.yaml:
+        split.current_part: 1
+    outs:
+    - path: data/ingested
+      hash: md5
+      md5: f3ab13570081e79cbfe50179fde83acd.dir
+      size: 61899238
+      nfiles: 2

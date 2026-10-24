@@ -16,6 +16,8 @@ uv sync
 
 The data and pipeline outputs are not stored in Git. They are versioned with [DVC](https://dvc.org) and stored on [DagsHub](https://dagshub.com/rosneru/sep26_bmlops_movie_reco).
 
+To simulate data that arrives over time, DagsHub only holds the data that has "arrived" so far (the rating parts `1..split.current_part`, see section 4). The complete raw data and all rating parts are the local data source and are never pushed.
+
 ### 1. Get access to DagsHub (once)
 
 1. Create a DagsHub account and ask `rosneru` to add you as a collaborator with *Write* access.
@@ -35,21 +37,34 @@ The data and pipeline outputs are not stored in Git. They are versioned with [DV
 uv run dvc pull
 ```
 
-This downloads everything the current Git commit refers to: the raw data, the split rating parts and the processed feature matrices.
+This downloads the data the current Git commit refers to:
+
+- `data/ingested/`: `movies.csv` and the rating parts `1..split.current_part` that have "arrived" so far
+- `data/processed/`: the user and movie matrices built from these parts
+
+The raw data (`data/raw/`) and the complete set of rating parts (`data/interim/ratings_parts/`) are not on DagsHub. If you need them, create them locally. This downloads the raw data from the template's S3 bucket and splits it, resulting in exactly the same files on every machine:
+
+```bash
+uv run dvc repro split_data
+```
 
 ### 3. The pipeline
 
 The pipeline is defined in `dvc.yaml`. `uv run dvc dag` shows it:
 
 ```
-import_raw_data -> split_data -> build_features
+import_raw_data -> split_data -> ingest
+                              -> build_features
 ```
 
-| Stage             | Does                                                                                       | Output                        |
-| ----------------- | ------------------------------------------------------------------------------------------ | ----------------------------- |
-| `import_raw_data` | Downloads `movies.csv` and `ratings.csv`                                                   | `data/raw/`                   |
-| `split_data`      | Splits the ratings by timestamp into `split.n_parts` parts of equal size (part 1 = oldest) | `data/interim/ratings_parts/` |
-| `build_features`  | Builds the user and movie matrices from the parts `1..split.current_part`                  | `data/processed/`             |
+| Stage             | Does                                                                                       | Output                        | On DagsHub |
+| ----------------- | ------------------------------------------------------------------------------------------ | ----------------------------- | ---------- |
+| `import_raw_data` | Downloads `movies.csv` and `ratings.csv`                                                   | `data/raw/`                   | no         |
+| `split_data`      | Splits the ratings by timestamp into `split.n_parts` parts of equal size (part 1 = oldest) | `data/interim/ratings_parts/` | no         |
+| `ingest`          | Copies `movies.csv` and the parts `1..split.current_part` (the data that has "arrived")    | `data/ingested/`              | yes        |
+| `build_features`  | Builds the user and movie matrices from the parts `1..split.current_part`                  | `data/processed/`             | yes        |
+
+The outputs of `import_raw_data` and `split_data` have `cache: false` in `dvc.yaml`, so `dvc push` never uploads them.
 
 Run the pipeline with:
 
@@ -74,7 +89,7 @@ split:
 To add the next part:
 
 1. Increase `current_part` in `params.yaml`, e.g. to `2`.
-2. Run `uv run dvc repro`. Only `build_features` runs again. With all 8 parts it needs about 5 GB RAM.
+2. Run `uv run dvc repro`. Only `ingest` and `build_features` run again. With all 8 parts `build_features` needs about 5 GB RAM.
 3. Commit and push:
 
    ```bash
@@ -84,7 +99,9 @@ To add the next part:
    git push           # ... before others pull the commit
    ```
 
-Since `params.yaml` and `dvc.lock` are versioned in Git, every commit documents which data was used. `git checkout <commit>` followed by `uv run dvc checkout` restores exactly that state.
+   `dvc push` uploads the new part. That is the moment the part "arrives" on DagsHub.
+
+Since `params.yaml` and `dvc.lock` are versioned in Git, every commit documents which data was used. `git checkout <commit>` followed by `uv run dvc pull` restores the ingested data and the matrices of that state.
 
 ## Testing the predict API locally
 

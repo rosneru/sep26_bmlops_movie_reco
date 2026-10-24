@@ -4,9 +4,14 @@ stages:
     deps:
       - src/initial_data_import/import_raw_data.py
       - src/config.py
+    # The raw data and its parts are the local data source of the simulation.
+    # They stay on this machine ('cache: false'), so 'dvc push' does not
+    # upload them. Only the stage 'ingest' decides what reaches DagsHub.
     outs:
-      - data/raw/movies.csv
-      - data/raw/ratings.csv
+      - data/raw/movies.csv:
+          cache: false
+      - data/raw/ratings.csv:
+          cache: false
 
   split_data:
     cmd: PYTHONPATH=src python src/initial_data_import/split_data.py --n-parts ${split.n_parts}
@@ -17,7 +22,26 @@ stages:
     params:
       - split.n_parts
     outs:
+      - data/interim/ratings_parts:
+          cache: false
+
+  # Simulates the data that has "arrived" so far: movies.csv and the rating
+  # parts 1..current_part. This is the only data of the source that is pushed
+  # to DagsHub.
+  ingest:
+    cmd: >-
+      mkdir -p data/ingested/ratings_parts &&
+      cp data/raw/movies.csv data/ingested/ &&
+      for i in $(seq -f %02g 1 ${split.current_part}); do
+      cp data/interim/ratings_parts/ratings_$i.csv data/ingested/ratings_parts/;
+      done
+    deps:
+      - data/raw/movies.csv
       - data/interim/ratings_parts
+    params:
+      - split.current_part
+    outs:
+      - data/ingested
 
   build_features:
     cmd: PYTHONPATH=src python src/features/build_features.py --current-part ${split.current_part}
