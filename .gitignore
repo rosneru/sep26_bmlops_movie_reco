@@ -10,6 +10,10 @@ wheels/
 .venv
 .claude/
 
+# Local data source, not pushed by DVC (see 'cache: false' in dvc.yaml)
+/data/raw/*.csv
+/data/interim/ratings_parts/
+
 # Secrets (e.g. passwords and tokens for Docker Compose)
 .env
 
