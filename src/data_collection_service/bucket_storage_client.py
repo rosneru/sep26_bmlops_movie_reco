@@ -1,18 +1,26 @@
 import os
+import re
 from pathlib import Path
 
 import boto3
-from botocore.exceptions import ClientError
+from boto3.exceptions import S3UploadFailedError
+from botocore.exceptions import BotoCoreError, ClientError
 
 
 class StorageConfigError(Exception):
     """The configuration for the storage is incomplete."""
 
 
+class StorageError(Exception):
+    """The storage could not be reached or rejected a request."""
+
+
 class BucketStorageClient:
     """Access to the rating data in the DagsHub storage bucket."""
 
     RATINGS_PREFIX = 'ratings_parts/'
+    # Matches e.g. 'ratings_parts/ratings_01.csv', the number is group 1
+    RATINGS_KEY_PATTERN = re.compile(r'ratings_parts/ratings_(\d+)\.csv')
 
     def __init__(self, endpoint_url: str, bucket: str, token: str):
         self.bucket = bucket
@@ -38,11 +46,35 @@ class BucketStorageClient:
         return cls(*values.values())
 
     def read_stored_part_numbers(self) -> list[int]:
-        """Return the numbers of the rating parts already in the bucket."""
-        response = self._client.list_objects_v2(
+        """
+        Return the sorted numbers of the rating parts already in the bucket.
+
+        Keys under the prefix that are no rating part are ignored.
+
+        Raises
+        ------
+        StorageError
+            If the bucket cannot be listed, e.g. it does not exist.
+        """
+        # list_objects_v2 returns at most 1000 keys per call, the paginator
+        # repeats the call until all keys are read
+        paginator = self._client.get_paginator('list_objects_v2')
+        pages = paginator.paginate(
             Bucket=self.bucket, Prefix=self.RATINGS_PREFIX
         )
-        return response.get('Contents', [])
+        numbers = []
+        try:
+            for page in pages:
+                # 'Contents' is missing if there are no matching keys
+                for obj in page.get('Contents', []):
+                    match = self.RATINGS_KEY_PATTERN.fullmatch(obj['Key'])
+                    if match:
+                        numbers.append(int(match.group(1)))
+        except (BotoCoreError, ClientError) as e:
+            raise StorageError(
+                f'Could not list {self.RATINGS_PREFIX}: {e}'
+            ) from e
+        return sorted(numbers)
 
     def exists(self, key: str) -> bool:
         """
@@ -52,7 +84,7 @@ class BucketStorageClient:
 
         Raises
         ------
-        botocore.exceptions.ClientError
+        StorageError
             For any error other than "not found", e.g. an invalid token.
         """
         try:
@@ -61,7 +93,9 @@ class BucketStorageClient:
             # S3-compatible services report "not found" with different codes
             if e.response['Error']['Code'] in ('404', 'NoSuchKey', 'NotFound'):
                 return False
-            raise
+            raise StorageError(f'Could not check {key}: {e}') from e
+        except BotoCoreError as e:
+            raise StorageError(f'Could not check {key}: {e}') from e
         return True
 
     def upload(self, path: Path, key: str) -> None:
@@ -72,8 +106,16 @@ class BucketStorageClient:
         bucket once the upload is complete, so an interrupted upload leaves
         no partial file behind. An existing object with the same key is
         overwritten, so check with exists() first if that is not intended.
+
+        Raises
+        ------
+        StorageError
+            If the upload fails, e.g. the bucket does not exist.
         """
-        self._client.upload_file(str(path), self.bucket, key)
+        try:
+            self._client.upload_file(str(path), self.bucket, key)
+        except (BotoCoreError, ClientError, S3UploadFailedError) as e:
+            raise StorageError(f'Could not upload {path} to {key}: {e}') from e
 
 
 if __name__ == '__main__':

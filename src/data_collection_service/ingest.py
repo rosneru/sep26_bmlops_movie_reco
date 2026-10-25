@@ -7,6 +7,11 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 import config
+from data_collection_service.bucket_storage_client import (
+    BucketStorageClient,
+    StorageConfigError,
+    StorageError,
+)
 
 RATINGS_PARTS_DIR = Path(
     os.getenv('RATINGS_PARTS_DIR', config.RATINGS_PARTS_DIR)
@@ -32,10 +37,13 @@ class IngestRequest(BaseModel):
 
 
 class IngestResponse(BaseModel):
-    status: Literal['planned', 'no_local_data']
+    status: Literal['ingested', 'no_local_data']
     detail: str | None = None
     requested_up_to: int | None = None
-    files: list[str] = []
+    # Keys of the objects uploaded by this call
+    uploaded: list[str] = []
+    # Keys that were already in the bucket and were left unchanged
+    skipped: list[str] = []
 
 
 def read_requested_up_to_from_params_file():
@@ -87,7 +95,6 @@ def ingest_up_to(requested_up_to_arg: int | None) -> IngestResponse:
             status='no_local_data',
             detail=f'No rating parts found in {RATINGS_PARTS_DIR}. '
             'Run "uv run dvc repro split_data" to create them.',
-            files=[],
             requested_up_to=requested_up_to,
         )
 
@@ -104,24 +111,64 @@ def ingest_up_to(requested_up_to_arg: int | None) -> IngestResponse:
             'Run "uv run dvc repro split_data".',
         )
 
-    files_to_be_uploaded = ['movies.csv'] + [
+    if not MOVIES_PATH.is_file():
+        raise HTTPException(
+            status_code=500,
+            detail=f'{MOVIES_PATH} is missing. Run "uv run dvc repro".',
+        )
+
+    # Local path and bucket key of every file the bucket should contain
+    part_filenames = [
         config.RATINGS_PART_FILENAME.format(n) for n in target_numbers
     ]
+    files = [(MOVIES_PATH, MOVIES_PATH.name)] + [
+        (RATINGS_PARTS_DIR / name, BucketStorageClient.RATINGS_PREFIX + name)
+        for name in part_filenames
+    ]
 
-    print('FILES TO BE UPLOADED')
-    print('====================')
-    print(files_to_be_uploaded)
-    print('====================')
+    try:
+        upload_client = BucketStorageClient.from_env()
+    except StorageConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
-    # TODO: As soon as saving is built in, 'Uploading' would be inappropriate.
-    # The endpoint doesn't respond until everything has been uploaded. Then the
-    # status is 'ingested' and the detail is 'Uploaded 3 files.', meaning it's
-    # in the past tense.
+    try:
+        stored_numbers = upload_client.read_stored_part_numbers()
+    except StorageError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    # The bucket is append-only, so it can't go back to fewer parts
+    if stored_numbers and max(stored_numbers) > requested_up_to:
+        raise HTTPException(
+            status_code=409,
+            detail=f'The bucket already contains parts up to '
+            f'{max(stored_numbers)}, more than requested_up_to='
+            f'{requested_up_to}. Stored parts are never removed.',
+        )
+
+    uploaded = []
+    skipped = []
+    try:
+        for path, key in files:
+            # Never overwrite: a stored object must stay as it is
+            if upload_client.exists(key):
+                skipped.append(key)
+                continue
+            upload_client.upload(path, key)
+            uploaded.append(key)
+    except StorageError as e:
+        # Files uploaded so far stay in the bucket and are skipped on retry
+        raise HTTPException(
+            status_code=502,
+            detail=f'Storage error after uploading {uploaded}: {e}',
+        ) from e
+
     return IngestResponse(
-        status='planned',
-        detail=f'Uploading {len(files_to_be_uploaded)} files..',
-        files=files_to_be_uploaded,
+        status='ingested',
+        detail=f'Uploaded {len(uploaded)} files, '
+        f'{len(skipped)} were already in the bucket.',
         requested_up_to=requested_up_to,
+        uploaded=uploaded,
+        skipped=skipped,
     )
 
 
