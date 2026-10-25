@@ -23,3 +23,7 @@ wheels/
 # Editor / OS
 .vscode/
 .DS_Store
+
+# model
+*.Python
+*.json

@@ -1,263 +1,816 @@
-
-import pandas as pd
-from sklearn.neighbors import NearestNeighbors
-import pickle
-
-
-def train_model(movie_matrix):
-    nbrs = NearestNeighbors(n_neighbors=20, algorithm='ball_tree').fit(
-        movie_matrix.drop('movieId', axis=1)
-    )
-    return nbrs
-
-if __name__ == '__main__':
-    movie_matrix = pd.read_csv('data/processed/movie_matrix.csv')
-    model = train_model(movie_matrix)
-    filehandler = open('models/model.pkl', 'wb')
-    pickle.dump(model, filehandler)
-    filehandler.close()
-
-
-"""
-import logging
-import os
+import copy
+import hashlib
+import json
+import tempfile
+from pathlib import Path
 
 import mlflow
-import mlflow.pytorch
+import mlflow.pytorch as mlflow_pytorch
 import numpy as np
 import pandas as pd
 import torch
-
-from pathlib import Path
 from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.nn import functional as F
 
-logger = logging.getLogger(__name__)
-
-# Configuration
-RATINGS_PATH = Path(os.getenv("RATINGS_PATH", "data/ratings.csv"))
-MLFLOW_TRACKING_URI = os.getenv(
-    "MLFLOW_TRACKING_URI", "http://localhost:5000"
+from src.config import (
+    PROJECT_ROOT,
+    TRAINING_DATA_DIR,
+    MODELS_DIR,
+    RANDOM_SEED as SEED,
+    BATCH_SIZE,
+    PAIRS_PER_USER,
+    EVAL_PAIRS_PER_USER,
+    EPOCHS,
+    LEARNING_RATE,
+    HIDDEN_DIM,
+    EMBEDDING_DIM,
+    MLFLOW_TRACKING_URI,
+    MLFLOW_EXPERIMENT_NAME,
+    MLFLOW_RUN_NAME,
+    MLFLOW_REGISTERED_MODEL_NAME,
+    MLFLOW_SERIALIZATION_FORMAT,
+    VAL_SEED_OFFSET,
+    TEST_SEED_OFFSET,
 )
 
-EXPERIMENT_NAME = "movie-recommendation-training"
-REGISTERED_MODEL_NAME = "movie-recommender"
 
-EMBEDDING_DIM = 32
-EPOCHS = 20
-BATCH_SIZE = 256
-LEARNING_RATE = 0.001
-RANDOM_SEED = 42
+def validate_config():
+    """Validate training settings before starting a run."""
+    positive_integers = {
+        'EPOCHS': EPOCHS,
+        'BATCH_SIZE': BATCH_SIZE,
+        'PAIRS_PER_USER': PAIRS_PER_USER,
+        'EVAL_PAIRS_PER_USER': EVAL_PAIRS_PER_USER,
+        'HIDDEN_DIM': HIDDEN_DIM,
+        'EMBEDDING_DIM': EMBEDDING_DIM,
+    }
 
+    for name, value in positive_integers.items():
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 1
+        ):
+            raise ValueError(
+                f'{name} must be a positive integer'
+            )
 
-class MatrixFactorization(nn.Module):
-    def __init__(self, n_users, n_movies, embedding_dim):
-        super().__init__()
+    if (
+        not np.isfinite(LEARNING_RATE)
+        or LEARNING_RATE <= 0
+    ):
+        raise ValueError(
+            'LEARNING_RATE must be finite and positive'
+        )
 
-        self.user_embedding = nn.Embedding(n_users, embedding_dim)
-        self.movie_embedding = nn.Embedding(n_movies, embedding_dim)
+    # This implementation logs the model using pickle.
+    # pt2 requires a separate export configuration.
+    if MLFLOW_SERIALIZATION_FORMAT != 'pickle':
+        raise ValueError(
+            'This training script currently supports '
+            "MLFLOW_SERIALIZATION_FORMAT='pickle' only"
+        )
 
-        self.user_bias = nn.Embedding(n_users, 1)
-        self.movie_bias = nn.Embedding(n_movies, 1)
-
-        self.global_bias = nn.Parameter(torch.zeros(1))
-
-        nn.init.normal_(self.user_embedding.weight, std=0.05)
-        nn.init.normal_(self.movie_embedding.weight, std=0.05)
-        nn.init.zeros_(self.user_bias.weight)
-        nn.init.zeros_(self.movie_bias.weight)
-
-    def forward(self, user_ids, movie_ids):
-        user_vectors = self.user_embedding(user_ids)
-        movie_vectors = self.movie_embedding(movie_ids)
-
-        interaction = (user_vectors * movie_vectors).sum(dim=1)
-
-        return (
-            interaction
-            + self.user_bias(user_ids).squeeze(-1)
-            + self.movie_bias(movie_ids).squeeze(-1)
-            + self.global_bias
+    if not MLFLOW_REGISTERED_MODEL_NAME.strip():
+        raise ValueError(
+            'MLFLOW_REGISTERED_MODEL_NAME cannot be empty'
         )
 
 
+def load_features(path, id_column, genres):
+    """Load prepared features and apply L2 normalization in memory."""
+    df = pd.read_csv(path)
+
+    if df.empty:
+        raise ValueError(f'{path.name}: empty data')
+
+    if id_column not in df.columns:
+        raise ValueError(
+            f'{path.name}: missing {id_column}'
+        )
+
+    ids = df[id_column]
+
+    if (
+        ids.isna().any()
+        or ids.astype(str).str.strip().eq('').any()
+        or ids.duplicated().any()
+    ):
+        raise ValueError(
+            f'{path.name}: missing or duplicate IDs'
+        )
+
+    expected_columns = {id_column, *genres}
+
+    if set(df.columns) != expected_columns:
+        raise ValueError(
+            f'{path.name}: unexpected feature columns'
+        )
+
+    values = df.loc[:, genres].to_numpy(
+        dtype=np.float32
+    )
+
+    if (
+        not np.isfinite(values).all()
+        or (values < 0).any()
+    ):
+        raise ValueError(
+            f'{path.name}: invalid feature values'
+        )
+
+    if (np.linalg.norm(values, axis=1) == 0).any():
+        raise ValueError(
+            f'{path.name}: zero genre vectors'
+        )
+
+    features = torch.from_numpy(values)
+    features = F.normalize(features, p=2, dim=1)
+
+    return ids.to_numpy(), features
+
+
+class TwoTower(nn.Module):
+    def __init__(
+        self,
+        input_dim,
+        hidden_dim,
+        embedding_dim,
+    ):
+        super().__init__()
+
+        self.user_tower = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, embedding_dim),
+        )
+
+        self.movie_tower = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, embedding_dim),
+        )
+
+    def encode_users(self, features):
+        return F.normalize(
+            self.user_tower(features),
+            p=2,
+            dim=1,
+        )
+
+    def encode_movies(self, features):
+        return F.normalize(
+            self.movie_tower(features),
+            p=2,
+            dim=1,
+        )
+
+    def forward(self, users, movies):
+        user_embeddings = self.encode_users(users)
+        movie_embeddings = self.encode_movies(movies)
+
+        return (
+            user_embeddings * movie_embeddings
+        ).sum(dim=1)
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+
+    with path.open('rb') as stream:
+        for chunk in iter(
+            lambda: stream.read(1024 * 1024),
+            b'',
+        ):
+            digest.update(chunk)
+
+    return digest.hexdigest()
+
+
+@torch.no_grad()
+def evaluate(model, users, movies, seed):
+    """Evaluate fixed sampled pairs against genre cosine targets."""
+    model.eval()
+
+    generator = torch.Generator().manual_seed(seed)
+
+    squared_error = 0.0
+    absolute_error = 0.0
+    baseline_squared_error = 0.0
+    count = 0
+
+    total_pairs = len(users) * EVAL_PAIRS_PER_USER
+
+    for start in range(
+        0,
+        total_pairs,
+        BATCH_SIZE,
+    ):
+        stop = min(
+            start + BATCH_SIZE,
+            total_pairs,
+        )
+
+        user_indices = (
+            torch.arange(start, stop)
+            // EVAL_PAIRS_PER_USER
+        )
+
+        movie_indices = torch.randint(
+            len(movies),
+            (stop - start,),
+            generator=generator,
+        )
+
+        batch_users = users[user_indices]
+        batch_movies = movies[movie_indices]
+
+        # Dot product equals cosine for normalized inputs.
+        targets = (
+            batch_users * batch_movies
+        ).sum(dim=1)
+
+        predictions = model(
+            batch_users,
+            batch_movies,
+        )
+
+        if not torch.isfinite(predictions).all().item():
+            raise RuntimeError(
+                'Non-finite predictions during evaluation'
+            )
+
+        errors = predictions - targets
+
+        squared_error += (
+            errors.square().sum().item()
+        )
+        absolute_error += (
+            errors.abs().sum().item()
+        )
+
+        baseline_predictions = F.cosine_similarity(
+            batch_users,
+            batch_movies,
+            dim=1,
+        )
+
+        baseline_squared_error += (
+            (baseline_predictions - targets)
+            .square()
+            .sum()
+            .item()
+        )
+
+        count += len(targets)
+
+    if count == 0:
+        raise ValueError(
+            'No evaluation pairs available'
+        )
+
+    return {
+        'rmse': float(
+            np.sqrt(squared_error / count)
+        ),
+        'mae': float(
+            absolute_error / count
+        ),
+        'cosine_baseline_rmse': float(
+            np.sqrt(
+                baseline_squared_error / count
+            )
+        ),
+    }
+
+
+def log_input_artifacts(metadata_path):
+    """Record input hashes and source files for traceability."""
+    data_files = [
+        'users_train.csv',
+        'users_val.csv',
+        'users_test.csv',
+        'movies.csv',
+        'metadata.json',
+    ]
+
+    manifest = {
+        name: file_sha256(
+            TRAINING_DATA_DIR / name
+        )
+        for name in data_files
+    }
+
+    with tempfile.TemporaryDirectory() as temporary_dir:
+        manifest_path = (
+            Path(temporary_dir)
+            / 'data_manifest.json'
+        )
+
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2),
+            encoding='utf-8',
+        )
+
+        mlflow.log_artifact(
+            str(manifest_path),
+            artifact_path='data',
+        )
+
+    mlflow.log_artifact(
+        str(metadata_path),
+        artifact_path='data',
+    )
+
+    mlflow.log_artifact(
+        str(Path(__file__).resolve()),
+        artifact_path='source',
+    )
+
+    mlflow.log_artifact(
+        str(PROJECT_ROOT / 'src' / 'config.py'),
+        artifact_path='source',
+    )
+
+
 def main():
-    torch.manual_seed(RANDOM_SEED)
-    np.random.seed(RANDOM_SEED)
+    validate_config()
 
-    # 1. Load and validate ratings
-    ratings = pd.read_csv(RATINGS_PATH)
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
 
-    required = {"userId", "movieId", "rating"}
-    if not required.issubset(ratings.columns):
-        raise ValueError(f"Missing columns: {required - set(ratings.columns)}")
-
-    if ratings.empty:
-        raise ValueError("Ratings dataset is empty.")
-
-    if ratings[["userId", "movieId", "rating"]].isna().any().any():
-        raise ValueError("Ratings contain missing values.")
-
-    ratings["rating"] = pd.to_numeric(ratings["rating"], errors="raise")
-
-    if not np.isfinite(ratings["rating"]).all():
-        raise ValueError("Ratings contain infinite values.")
-
-    # 2. Encode user and movie IDs
-    user_codes, unique_users = pd.factorize(ratings["userId"], sort=True)
-    movie_codes, unique_movies = pd.factorize(ratings["movieId"], sort=True)
-
-    n_users = len(unique_users)
-    n_movies = len(unique_movies)
-
-    users = torch.tensor(user_codes, dtype=torch.long)
-    movies = torch.tensor(movie_codes, dtype=torch.long)
-    targets = torch.tensor(ratings["rating"].to_numpy(), dtype=torch.float32)
-
-    # 3. Train/validation split
-    generator = torch.Generator().manual_seed(RANDOM_SEED)
-    indices = torch.randperm(len(ratings), generator=generator)
-
-    split = int(0.8 * len(indices))
-    if split == 0 or split == len(indices):
-        raise ValueError("Not enough ratings for train/validation split.")
-
-    train_idx = indices[:split]
-    val_idx = indices[split:]
-
-    train_data = TensorDataset(
-        users[train_idx], movies[train_idx], targets[train_idx]
-    )
-    val_data = TensorDataset(
-        users[val_idx], movies[val_idx], targets[val_idx]
+    metadata_path = (
+        TRAINING_DATA_DIR / 'metadata.json'
     )
 
-    train_loader = DataLoader(
-        train_data, batch_size=BATCH_SIZE, shuffle=True
-    )
-    val_loader = DataLoader(
-        val_data, batch_size=BATCH_SIZE, shuffle=False
+    metadata = json.loads(
+        metadata_path.read_text(
+            encoding='utf-8'
+        )
     )
 
-    # 4. Initialize model
-    model = MatrixFactorization(n_users, n_movies, EMBEDDING_DIM)
+    genres = metadata['genres']
+
+    if not genres or len(set(genres)) != len(genres):
+        raise ValueError(
+            'Metadata must contain unique genre features'
+        )
+
+    user_ids = {}
+    user_features = {}
+
+    for split in ('train', 'val', 'test'):
+        ids, features = load_features(
+            TRAINING_DATA_DIR
+            / f'users_{split}.csv',
+            'userId',
+            genres,
+        )
+
+        user_ids[split] = ids
+        user_features[split] = features
+
+    # Users must not overlap across splits.
+    for left, right in (
+        ('train', 'val'),
+        ('train', 'test'),
+        ('val', 'test'),
+    ):
+        if (
+            set(user_ids[left])
+            & set(user_ids[right])
+        ):
+            raise ValueError(
+                f'User overlap: {left} and {right}'
+            )
+
+    _, movies = load_features(
+        TRAINING_DATA_DIR / 'movies.csv',
+        'movieId',
+        genres,
+    )
+
+    model = TwoTower(
+        input_dim=len(genres),
+        hidden_dim=HIDDEN_DIM,
+        embedding_dim=EMBEDDING_DIM,
+    )
 
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=LEARNING_RATE
+        model.parameters(),
+        lr=LEARNING_RATE,
     )
-    criterion = nn.MSELoss()
 
-    # 5. Configure MLflow
-    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    mlflow.set_experiment(EXPERIMENT_NAME)
+    mlflow.set_tracking_uri(
+        MLFLOW_TRACKING_URI
+    )
+    mlflow.set_registry_uri(
+        MLFLOW_TRACKING_URI
+    )
+    mlflow.set_experiment(
+        MLFLOW_EXPERIMENT_NAME
+    )
 
-    with mlflow.start_run(run_name="matrix-factorization-training"):
+    training_config = {
+        'seed': SEED,
+        'batch_size': BATCH_SIZE,
+        'pairs_per_user': PAIRS_PER_USER,
+        'eval_pairs_per_user': EVAL_PAIRS_PER_USER,
+        'epochs': EPOCHS,
+        'learning_rate': LEARNING_RATE,
+        'hidden_dim': HIDDEN_DIM,
+        'embedding_dim': EMBEDDING_DIM,
+        'input_dim': len(genres),
+        'n_train_users': len(user_features['train']),
+        'n_val_users': len(user_features['val']),
+        'n_test_users': len(user_features['test']),
+        'n_movies': len(movies),
+        'loss': 'mse',
+        'label': 'genre_cosine',
+        'pair_sampling': 'uniform_movies_with_replacement',
+        'device': 'cpu',
+        'val_seed_offset': VAL_SEED_OFFSET,
+        'test_seed_offset': TEST_SEED_OFFSET,
+        'registered_model_name': (
+            MLFLOW_REGISTERED_MODEL_NAME
+        ),
+        'serialization_format': (
+            MLFLOW_SERIALIZATION_FORMAT
+        ),
+    }
 
-        mlflow.log_params({
-            "algorithm": "matrix_factorization",
-            "embedding_dim": EMBEDDING_DIM,
-            "epochs": EPOCHS,
-            "batch_size": BATCH_SIZE,
-            "learning_rate": LEARNING_RATE,
-            "n_users": n_users,
-            "n_movies": n_movies,
+    with mlflow.start_run(
+        run_name=MLFLOW_RUN_NAME,
+    ) as run:
+        mlflow.log_params(training_config)
+
+        mlflow.set_tags({
+            'task': 'genre_similarity_approximation',
+            'uses_ratings': 'false',
+            'evaluation': 'held_out_users_sampled_pairs',
+            'registration_status': 'pending',
         })
 
-        best_rmse = float("inf")
+        log_input_artifacts(metadata_path)
+
+        best_val_rmse = float('inf')
         best_state = None
+        best_epoch = None
 
-        # 6. Training loop
-        for epoch in range(EPOCHS):
+        train_users = user_features['train']
+
+        total_pairs = (
+            len(train_users)
+            * PAIRS_PER_USER
+        )
+
+        for epoch in range(1, EPOCHS + 1):
             model.train()
-            train_squared_error = 0.0
-            train_count = 0
 
-            for batch_users, batch_movies, batch_ratings in train_loader:
-                optimizer.zero_grad()
+            # Sample new movies each epoch.
+            generator = (
+                torch.Generator()
+                .manual_seed(SEED + epoch)
+            )
 
-                predictions = model(batch_users, batch_movies)
-                loss = criterion(predictions, batch_ratings)
+            user_order = torch.randperm(
+                len(train_users),
+                generator=generator,
+            )
+
+            squared_error = 0.0
+            count = 0
+
+            for start in range(
+                0,
+                total_pairs,
+                BATCH_SIZE,
+            ):
+                stop = min(
+                    start + BATCH_SIZE,
+                    total_pairs,
+                )
+
+                positions = (
+                    torch.arange(start, stop)
+                    // PAIRS_PER_USER
+                )
+
+                batch_user_indices = (
+                    user_order[positions]
+                )
+
+                batch_movie_indices = torch.randint(
+                    len(movies),
+                    (stop - start,),
+                    generator=generator,
+                )
+
+                batch_users = train_users[
+                    batch_user_indices
+                ]
+
+                batch_movies = movies[
+                    batch_movie_indices
+                ]
+
+                # These are synthetic genre labels,
+                # not observed ratings.
+                targets = (
+                    batch_users * batch_movies
+                ).sum(dim=1)
+
+                optimizer.zero_grad(
+                    set_to_none=True
+                )
+
+                predictions = model(
+                    batch_users,
+                    batch_movies,
+                )
+
+                loss = F.mse_loss(
+                    predictions,
+                    targets,
+                )
+
+                if not torch.isfinite(loss).item():
+                    raise RuntimeError(
+                        'Non-finite training loss '
+                        f'at epoch {epoch}'
+                    )
 
                 loss.backward()
                 optimizer.step()
 
-                train_squared_error += (
-                    (predictions.detach() - batch_ratings).square().sum().item()
+                squared_error += (
+                    (predictions.detach() - targets)
+                    .square()
+                    .sum()
+                    .item()
                 )
-                train_count += len(batch_ratings)
 
-            train_rmse = np.sqrt(train_squared_error / train_count)
+                count += len(targets)
 
-            # 7. Validation
-            model.eval()
-            val_squared_error = 0.0
-            val_absolute_error = 0.0
-            val_count = 0
-
-            with torch.no_grad():
-                for batch_users, batch_movies, batch_ratings in val_loader:
-                    predictions = model(batch_users, batch_movies)
-                    errors = predictions - batch_ratings
-
-                    val_squared_error += errors.square().sum().item()
-                    val_absolute_error += errors.abs().sum().item()
-                    val_count += len(batch_ratings)
-
-            val_rmse = np.sqrt(val_squared_error / val_count)
-            val_mae = val_absolute_error / val_count
-
-            mlflow.log_metrics({
-                "train_rmse": float(train_rmse),
-                "val_rmse": float(val_rmse),
-                "val_mae": float(val_mae),
-            }, step=epoch + 1)
-
-            logger.info(
-                "Epoch %d/%d | Train RMSE: %.4f | Val RMSE: %.4f | Val MAE: %.4f",
-                epoch + 1, EPOCHS, train_rmse, val_rmse, val_mae
+            train_rmse = float(
+                np.sqrt(
+                    squared_error / count
+                )
             )
 
-            if val_rmse < best_rmse:
-                best_rmse = val_rmse
-                best_state = {
-                    key: value.detach().clone()
-                    for key, value in model.state_dict().items()
-                }
+            # Fixed validation sampling across epochs.
+            val_metrics = evaluate(
+                model,
+                user_features['val'],
+                movies,
+                seed=(
+                    SEED + VAL_SEED_OFFSET
+                ),
+            )
 
-        # 8. Restore best model
+            mlflow.log_metrics({
+                'train_rmse': train_rmse,
+                'val_rmse': val_metrics['rmse'],
+                'val_mae': val_metrics['mae'],
+                'val_cosine_baseline_rmse': (
+                    val_metrics[
+                        'cosine_baseline_rmse'
+                    ]
+                ),
+            }, step=epoch)
+
+            print(
+                f'Epoch {epoch:02d}/{EPOCHS} | '
+                f'train RMSE={train_rmse:.5f} | '
+                f'val RMSE={val_metrics["rmse"]:.5f}'
+            )
+
+            if val_metrics['rmse'] < best_val_rmse:
+                best_val_rmse = (
+                    val_metrics['rmse']
+                )
+
+                best_state = copy.deepcopy(
+                    model.state_dict()
+                )
+
+                best_epoch = epoch
+
+        if best_state is None or best_epoch is None:
+            raise RuntimeError(
+                'No valid checkpoint selected; '
+                'check validation loss.'
+            )
+
+        # Restore the best validation checkpoint.
         model.load_state_dict(best_state)
         model.eval()
 
-        mlflow.log_metric("best_val_rmse", float(best_rmse))
-
-        # 9. Save ID mappings as artifacts
-        mapping_dir = Path("training_artifacts")
-        mapping_dir.mkdir(exist_ok=True)
-
-        pd.DataFrame({
-            "userId": unique_users,
-            "user_index": range(n_users)
-        }).to_csv(mapping_dir / "user_mapping.csv", index=False)
-
-        pd.DataFrame({
-            "movieId": unique_movies,
-            "movie_index": range(n_movies)
-        }).to_csv(mapping_dir / "movie_mapping.csv", index=False)
-
-        mlflow.log_artifacts(str(mapping_dir), artifact_path="mappings")
-
-        # 10. Register trained model
-        model_info = mlflow.pytorch.log_model(
-            pytorch_model=model,
-            name="model",
-            registered_model_name=REGISTERED_MODEL_NAME,
+        # Evaluate test only after model selection.
+        test_metrics = evaluate(
+            model,
+            user_features['test'],
+            movies,
+            seed=(
+                SEED + TEST_SEED_OFFSET
+            ),
         )
 
-        logger.info("Best validation RMSE: %.4f", best_rmse)
-        logger.info("Registered model URI: %s", model_info.model_uri)
+        mlflow.log_metrics({
+            'best_epoch': float(best_epoch),
+            'best_val_rmse': best_val_rmse,
+            'test_rmse': test_metrics['rmse'],
+            'test_mae': test_metrics['mae'],
+            'test_cosine_baseline_rmse': (
+                test_metrics[
+                    'cosine_baseline_rmse'
+                ]
+            ),
+        })
+
+        output_dir = (
+            MODELS_DIR
+            / 'two_tower'
+            / run.info.run_id
+        )
+
+        output_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        checkpoint_path = (
+            output_dir / 'checkpoint.pt'
+        )
+
+        torch.save({
+            'model_state_dict': (
+                model.state_dict()
+            ),
+            'input_dim': len(genres),
+            'hidden_dim': HIDDEN_DIM,
+            'embedding_dim': EMBEDDING_DIM,
+            'genres': genres,
+            'input_normalization': 'row_l2',
+            'config': training_config,
+            'best_epoch': best_epoch,
+            'label_type': 'genre_cosine_pseudo_label',
+        }, checkpoint_path)
+
+        metrics_path = (
+            output_dir / 'metrics.json'
+        )
+
+        metrics_path.write_text(
+            json.dumps({
+                'best_epoch': best_epoch,
+                'best_val_rmse': best_val_rmse,
+                'test': test_metrics,
+            }, indent=2),
+            encoding='utf-8',
+        )
+
+        # Persist training outputs before registration.
+        mlflow.log_artifacts(
+            str(output_dir),
+            artifact_path='training',
+        )
+
+        print(f'Best epoch: {best_epoch}')
+        print(
+            f'Test RMSE: '
+            f'{test_metrics["rmse"]:.5f}'
+        )
+        print(
+            f'Test MAE: '
+            f'{test_metrics["mae"]:.5f}'
+        )
+        print(
+            f'MLflow run ID: '
+            f'{run.info.run_id}'
+        )
+        print(
+            f'Checkpoint: {checkpoint_path}'
+        )
+
+        mlflow.set_tag(
+            'training_status',
+            'completed',
+        )
+
+        # Register the selected model.
+        try:
+            model_info = mlflow_pytorch.log_model(
+                pytorch_model=model,
+                name='model',
+                serialization_format=(
+                    MLFLOW_SERIALIZATION_FORMAT
+                ),
+                code_paths=[
+                    str(PROJECT_ROOT / 'src'),
+                ],
+                registered_model_name=(
+                    MLFLOW_REGISTERED_MODEL_NAME
+                ),
+                metadata={
+                    'source_training_run_id': (
+                        run.info.run_id
+                    ),
+                    'genres': genres,
+                    'input_normalization': 'row_l2',
+                    'label_type': (
+                        'genre_cosine_pseudo_label'
+                    ),
+                },
+            )
+
+            registered_version = (
+                model_info.registered_model_version
+            )
+
+            if registered_version is None:
+                raise RuntimeError(
+                    'Model was logged, but no registered '
+                    'model version was returned.'
+                )
+
+        except Exception:
+            mlflow.set_tag(
+                'registration_status',
+                'failed',
+            )
+
+            print(
+                'Training outputs were saved, '
+                'but model registration failed. '
+                'The saved checkpoint can be registered '
+                'without retraining.'
+            )
+
+            raise
+
+        registry_uri = (
+            f'models:/{MLFLOW_REGISTERED_MODEL_NAME}'
+            f'/{registered_version}'
+        )
+
+        registration_info = {
+            'model_name': (
+                MLFLOW_REGISTERED_MODEL_NAME
+            ),
+            'model_version': str(
+                registered_version
+            ),
+            'model_uri': model_info.model_uri,
+            'registry_uri': registry_uri,
+            'source_training_run_id': (
+                run.info.run_id
+            ),
+        }
+
+        registration_path = (
+            output_dir / 'registration.json'
+        )
+
+        registration_path.write_text(
+            json.dumps(
+                registration_info,
+                indent=2,
+            ),
+            encoding='utf-8',
+        )
+
+        mlflow.log_artifact(
+            str(registration_path),
+            artifact_path='training',
+        )
+
+        mlflow.set_tags({
+            'registration_status': 'completed',
+            'registered_model_name': (
+                MLFLOW_REGISTERED_MODEL_NAME
+            ),
+            'registered_model_version': str(
+                registered_version
+            ),
+        })
+
+        print(
+            f'Model URI: '
+            f'{model_info.model_uri}'
+        )
+        print(
+            f'Registered model: '
+            f'{MLFLOW_REGISTERED_MODEL_NAME}'
+        )
+        print(
+            f'Registered model version: '
+            f'{registered_version}'
+        )
+        print(
+            f'Registry URI: {registry_uri}'
+        )
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+if __name__ == '__main__':
     main()
-"""
