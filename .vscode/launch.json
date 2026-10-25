@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Runs the open file with src/ on the import path, like PYTHONPATH=src
+      // in dvc.yaml, so 'import config' works
+      "name": "Current file (src on PYTHONPATH)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}/src" },
+      "console": "integratedTerminal"
+    },
+    {
+      // Runs the whole service under the debugger. No --reload: with it,
+      // uvicorn runs the app in a subprocess and breakpoints would not hit.
+      "name": "Data collection service (uvicorn)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "data_collection_service.main:api",
+        "--app-dir",
+        "src",
+        "--port",
+        "8001"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ]
+}
