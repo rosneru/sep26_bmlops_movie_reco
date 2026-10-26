@@ -1,0 +1,7 @@
+# TODO
+
+* Remove duplicate data quality checks from `train_model.py` and handle them during validation and preprocessing. Keep only essential input compatibility checks and checks for non-finite loss and predictions in training.
+
+# Maybe Not TODO
+For educational purposes, we keep a separate local checkpoint alongside the model stored in MLflow. Our tests compare checkpoint hashes and predictions on fixed inputs to verify that the restored model matches the local reference.
+For a purely practical project, we could add a TODO to remove the redundant local storage and adapt the tests once the MLflow workflow has been validated successfully. However, for this educational project, we recommend keeping both copies and the comparison tests to demonstrate model storage, restoration, and validation.
