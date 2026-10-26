@@ -9,6 +9,7 @@ import mlflow.pytorch as mlflow_pytorch
 import numpy as np
 import pandas as pd
 import torch
+from mlflow import MlflowClient
 from torch import nn
 from torch.nn import functional as F
 
@@ -754,6 +755,34 @@ def main():
             f'/{registered_version}'
         )
 
+        # Expose model metadata in the Registry version's Tags panel.
+        client = MlflowClient()
+        version_tags = {
+            'source_training_run_id': run.info.run_id,
+            'genres': json.dumps(genres, ensure_ascii=False),
+            'input_normalization': 'row_l2',
+            'label_type': 'genre_cosine_pseudo_label',
+        }
+
+        mlflow.set_tag('registry_tags_status', 'pending')
+
+        try:
+            for key, value in version_tags.items():
+                client.set_model_version_tag(
+                    name=MLFLOW_REGISTERED_MODEL_NAME,
+                    version=str(registered_version),
+                    key=key,
+                    value=value,
+                )
+        except Exception:
+            mlflow.set_tag('registry_tags_status', 'failed')
+            print(
+                'The model version was created, but writing its '
+                'Registry tags failed. Do not retrain to retry tags.'
+            )
+            raise
+
+        mlflow.set_tag('registry_tags_status', 'completed')
         registration_info = {
             'model_name': (
                 MLFLOW_REGISTERED_MODEL_NAME

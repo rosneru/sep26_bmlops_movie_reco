@@ -21,7 +21,6 @@ wheels/
 .ipynb_checkpoints/
 
 # Editor / OS
-.vscode/
 .DS_Store
 
 # model
