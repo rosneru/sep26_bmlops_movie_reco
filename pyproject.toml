@@ -1,11 +1,8 @@
 [project]
 name = "sep26-bmlops-movie-reco"
 version = "0.1.0"
-description = "Add your description here"
+description = "Movie recommendation project from Liora September 2026 MLOps training"
 readme = "README.md"
-authors = [
-    { name = "Uwe Rosner", email = "oscottmusic@posteo.de" }
-]
 requires-python = ">=3.10"
 dependencies = [
     "boto3>=1.43.106",
