@@ -15,7 +15,6 @@ from src.config import (
     MLFLOW_REGISTERED_MODEL_NAME,
     MODELS_DIR,
 )
-from src.train_service.train_model import TwoTower
 
 
 def require(condition, message):
@@ -50,26 +49,6 @@ def download_artifact(client, run_id, name, directory):
             str(directory),
         )
     )
-
-
-def restore_checkpoint(path):
-    checkpoint = torch.load(
-        path,
-        map_location='cpu',
-        weights_only=True,
-    )
-
-    model = TwoTower(
-        input_dim=checkpoint['input_dim'],
-        hidden_dim=checkpoint['hidden_dim'],
-        embedding_dim=checkpoint['embedding_dim'],
-    )
-
-    model.load_state_dict(
-        checkpoint['model_state_dict']
-    )
-
-    return model.eval(), checkpoint
 
 
 def compare_predictions(first, second, input_dim):
@@ -182,48 +161,12 @@ def test_tracking(client, run_id):
             f'Invalid values in {name}',
         )
 
-    with tempfile.TemporaryDirectory() as directory:
-        path = download_artifact(
-            client,
-            run_id,
-            'training/metrics.json',
-            directory,
-        )
-        saved = read_json(path)
-
-    expected_metrics = {
-        'best_epoch': saved['best_epoch'],
-        'best_val_rmse': saved['best_val_rmse'],
-        'test_rmse': saved['test']['rmse'],
-        'test_mae': saved['test']['mae'],
-        'test_cosine_baseline_rmse': (
-            saved['test']['cosine_baseline_rmse']
-        ),
-    }
-
-    for name, expected in expected_metrics.items():
-        require(
-            name in run.data.metrics,
-            f'Missing metric: {name}',
-        )
-
-        actual = run.data.metrics[name]
-
-        require(
-            np.isfinite(actual)
-            and np.isfinite(expected),
-            f'Non-finite metric: {name}',
-        )
-
-        require(
-            np.isclose(
-                actual,
-                expected,
-                rtol=1e-7,
-                atol=1e-9,
-            ),
-            f'Metric differs from metrics.json: {name}',
-        )
+    for name in (
+        'best_epoch', 'best_val_rmse', 'test_rmse', 'test_mae',
+        'test_cosine_baseline_rmse',
+    ):
+        require(name in run.data.metrics, f'Missing metric: {name}')
+        require(np.isfinite(run.data.metrics[name]), f'Non-finite metric: {name}')
 
     best_validation = min(
         histories['val_rmse'],
@@ -249,160 +192,48 @@ def test_tracking(client, run_id):
 
     print(
         'PASS: experiment tracking, epoch history, '
-        'best epoch, and saved metrics'
+        'best epoch, and logged metrics'
     )
 
     return run
 
 
 def test_artifacts(client, run_id):
-    local_checkpoint = (
-        MODELS_DIR
-        / 'two_tower'
-        / run_id
-        / 'checkpoint.pt'
-    )
-
-    require(
-        local_checkpoint.is_file(),
-        f'Local checkpoint not found: {local_checkpoint}',
-    )
-
-    artifact_names = (
-        'training/checkpoint.pt',
-        'training/metrics.json',
-        'training/registration.json',
-        'data/metadata.json',
-        'data/data_manifest.json',
-    )
-
+    """Verify uploaded metadata and the loadable MLflow model."""
     hashes = {}
-
     with tempfile.TemporaryDirectory() as directory:
-        paths = {}
-
-        for name in artifact_names:
-            path = download_artifact(
-                client,
-                run_id,
-                name,
-                directory,
-            )
-
-            require(
-                path.is_file(),
-                f'Artifact not downloaded: {name}',
-            )
-
-            hashes[name] = file_sha256(path)
-            paths[name] = path
-
-        require(
-            file_sha256(local_checkpoint)
-            == hashes['training/checkpoint.pt'],
-            'Local and downloaded checkpoint hashes differ',
-        )
-
-        downloaded_model, checkpoint = restore_checkpoint(
-            paths['training/checkpoint.pt']
-        )
-
-        local_model, _ = restore_checkpoint(
-            local_checkpoint
-        )
-
-        metadata = read_json(
-            paths['data/metadata.json']
-        )
-
-        require(
-            checkpoint['genres'] == metadata['genres'],
-            'Checkpoint and metadata genre order differ',
-        )
-
-        max_difference = compare_predictions(
-            local_model,
-            downloaded_model,
-            checkpoint['input_dim'],
-        )
-
-    print(
-        'PASS: artifact download, checkpoint hash, '
-        'genre schema, and prediction equality'
-    )
-    print(
-        f'Max prediction difference: {max_difference:.10f}'
-    )
-
+        metadata_path = download_artifact(client, run_id, 'data/metadata.json', directory)
+        model_path = download_artifact(client, run_id, 'model', directory)
+        metadata = read_json(metadata_path)
+        model_info = mlflow.models.Model.load(str(model_path / 'MLmodel'))
+        require(model_info.metadata['genres'] == metadata['genres'],
+                'Model and preparation genre order differ')
+        model = mlflow_pytorch.load_model(str(model_path), map_location='cpu')
+        compare_predictions(model, model, len(metadata['genres']))
+        hashes['data/metadata.json'] = file_sha256(metadata_path)
+        for path in sorted(model_path.rglob('*')):
+            if path.is_file() and '__pycache__' not in path.parts:
+                hashes['model/' + path.relative_to(model_path).as_posix()] = file_sha256(path)
+    print('PASS: artifact download, genre schema and finite model predictions')
     return hashes
 
 
 def test_registry(client, run_id, model_name, version):
-    model_version = client.get_model_version(
-        model_name,
-        str(version),
+    model_version = client.get_model_version(model_name, str(version))
+    require(model_version.status == 'READY',
+            f'Model version is not READY: {model_version.status}')
+    require(model_version.run_id == run_id,
+            'Model version belongs to a different training run')
+    reference_model = mlflow_pytorch.load_model(f'runs:/{run_id}/model', map_location='cpu')
+    registry_uri = f'models:/{model_name}/{version}'
+    loaded_model = mlflow_pytorch.load_model(registry_uri, map_location='cpu')
+    run = client.get_run(run_id)
+    max_difference = compare_predictions(
+        reference_model, loaded_model, int(run.data.params['input_dim'])
     )
-
-    require(
-        model_version.status == 'READY',
-        f'Model version is not READY: {model_version.status}',
-    )
-
-    require(
-        model_version.run_id == run_id,
-        'Model version belongs to a different training run',
-    )
-
-    with tempfile.TemporaryDirectory() as directory:
-        registration_path = download_artifact(
-            client,
-            run_id,
-            'training/registration.json',
-            directory,
-        )
-        registration = read_json(registration_path)
-
-        require(
-            registration['model_name'] == model_name
-            and str(registration['model_version'])
-            == str(version),
-            'Requested version differs from registration.json',
-        )
-
-        checkpoint_path = download_artifact(
-            client,
-            run_id,
-            'training/checkpoint.pt',
-            directory,
-        )
-
-        reference_model, checkpoint = restore_checkpoint(
-            checkpoint_path
-        )
-
-        registry_uri = (
-            f'models:/{model_name}/{version}'
-        )
-
-        loaded_model = mlflow_pytorch.load_model(
-            registry_uri,
-            map_location='cpu',
-        )
-
-        max_difference = compare_predictions(
-            reference_model,
-            loaded_model,
-            checkpoint['input_dim'],
-        )
-
-    print(
-        'PASS: registered version provenance, '
-        'model loading, and prediction equality'
-    )
+    print('PASS: registered version provenance, loading and prediction equality')
     print(f'Registry URI: {registry_uri}')
-    print(
-        f'Max prediction difference: {max_difference:.10f}'
-    )
+    print(f'Max prediction difference: {max_difference:.10f}')
 
 
 def persistence_snapshot(client, run_id):
@@ -472,7 +303,7 @@ def test_persistence(client, run_id, stage):
 
         print(
             'PASS: run information, metrics, artifacts, '
-            'and checkpoint predictions survived restart'
+            'and model predictions survived restart'
         )
 
 

@@ -1,37 +1,22 @@
-import json
-
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from src.config import (
-    USER_MATRIX_PATH,
-    MOVIE_MATRIX_PATH,
-    TRAINING_DATA_DIR,
-    RANDOM_SEED,
     MISSING_GENRE,
-    TRAIN_RATIO,
-    VAL_RATIO,
+    MOVIE_MATRIX_PATH,
+    RANDOM_SEED,
     TEST_RATIO,
+    TRAIN_RATIO,
+    USER_MATRIX_PATH,
+    VAL_RATIO,
 )
+from src.train_service.check_data import inspect_matrix
+
 
 def read_matrix(path, id_column):
-    """Clean recoverable row issues and save rejected rows."""
+    """Clean recoverable row issues without writing intermediate files."""
     df = pd.read_csv(path)
-
-    if id_column not in df.columns:
-        raise ValueError(f'{path.name}: missing {id_column}')
-
-    feature_columns = [
-        column for column in df.columns
-        if column != id_column
-    ]
-
-    if not feature_columns:
-        raise ValueError(f'{path.name}: no feature columns')
-
-    if df.empty:
-        raise ValueError(f'{path.name}: empty dataset')
 
     input_count = len(df)
 
@@ -39,107 +24,26 @@ def read_matrix(path, id_column):
     duplicate_mask = df.duplicated(keep='first')
     duplicate_count = int(duplicate_mask.sum())
 
-    duplicates = df.loc[duplicate_mask].copy()
-    duplicates['rejection_reason'] = 'exact_duplicate'
-
     df = df.loc[~duplicate_mask].copy()
-
-    # Convert invalid feature strings to NaN so they can be identified.
-    numeric_features = df[feature_columns].apply(
-        pd.to_numeric,
-        errors='coerce',
+    numeric_features, issues = inspect_matrix(
+        df, id_column, binary=id_column == 'movieId'
     )
-
-    values = numeric_features.to_numpy(dtype=np.float64)
-
-    missing_id = (
-        df[id_column].isna()
-        | df[id_column].astype(str).str.strip().eq('')
-    ).to_numpy()
-
-    invalid_features = ~np.isfinite(values).all(axis=1)
-
-    out_of_range = (
-        np.isfinite(values)
-        & ((values < 0) | (values > 1))
-    ).any(axis=1)
-
-    # Movie genre features must be binary before normalization.
-    non_binary = np.zeros(len(df), dtype=bool)
-
-    if id_column == 'movieId':
-        non_binary = (
-            np.isfinite(values)
-            & ~np.isin(values, [0, 1])
-        ).any(axis=1)
-
-    reasons = []
-
-    for row in range(len(df)):
-        row_reasons = []
-
-        if missing_id[row]:
-            row_reasons.append('missing_id')
-
-        if invalid_features[row]:
-            row_reasons.append('missing_or_invalid_feature')
-
-        if out_of_range[row]:
-            row_reasons.append('feature_outside_0_1')
-
-        if non_binary[row]:
-            row_reasons.append('non_binary_movie_feature')
-
-        reasons.append(';'.join(row_reasons))
-
-    bad_rows = (
-        missing_id
-        | invalid_features
-        | out_of_range
-        | non_binary
-    )
-
-    rejected = df.loc[bad_rows].copy()
-    rejected['rejection_reason'] = np.asarray(reasons)[bad_rows]
-
-    # Save rejected rows, preserving their original values.
-    rejected_dir = TRAINING_DATA_DIR / 'rejected'
-    rejected_dir.mkdir(parents=True, exist_ok=True)
-
-    rejected_path = rejected_dir / f'{path.stem}_rejected.csv'
-
-    pd.concat(
-        [duplicates, rejected],
-        ignore_index=True,
-    ).to_csv(rejected_path, index=False)
+    bad_rows = np.zeros(len(df), dtype=bool)
+    for mask in issues.values():
+        bad_rows |= mask
 
     clean_df = df.loc[~bad_rows].copy()
     clean_features = numeric_features.loc[~bad_rows].copy()
 
     if clean_df.empty:
-        raise ValueError(
-            f'{path.name}: no valid rows remain; '
-            f'see {rejected_path}'
-        )
+        raise ValueError(f'{path.name}: no valid rows remain')
 
     # Exact duplicates were already removed. Remaining duplicate IDs
     # therefore have conflicting feature values.
     conflicting_ids = clean_df[id_column].duplicated(keep=False)
 
     if conflicting_ids.any():
-        conflict_path = (
-            rejected_dir / f'{path.stem}_conflicting_ids.csv'
-        )
-
-        clean_df.loc[conflicting_ids].to_csv(
-            conflict_path,
-            index=False,
-        )
-
-        raise ValueError(
-            f'{path.name}: duplicate IDs with conflicting features; '
-            f'see {conflict_path}'
-        )
+        raise ValueError(f'{path.name}: duplicate IDs with conflicting features')
 
     print(
         f'{path.name}: '
@@ -154,28 +58,18 @@ def read_matrix(path, id_column):
         clean_features.reset_index(drop=True),
     )
 
+
 def clean_and_normalize(ids, features, genre_columns):
     """Remove zero genre vectors and apply row-wise L2 normalization."""
-    values = features.loc[:, genre_columns].to_numpy(
-        dtype=np.float32
-    )
+    values = features.loc[:, genre_columns].to_numpy(dtype=np.float32)
 
     keep = np.any(values != 0, axis=1)
     removed = int((~keep).sum())
-
     ids = ids.loc[keep].reset_index(drop=True)
     values = values[keep]
-
     if len(values) == 0:
-        raise ValueError(
-            'No rows remain after removing zero genre vectors'
-        )
-
-    # Each row is normalized independently.
-    # No statistics are learned from validation or test users.
-    # Because of cosine simularity, we use L2-Norm
-    norms = np.linalg.norm(values, axis=1, keepdims=True)
-    values = values / norms
+        raise ValueError('No rows remain after removing zero genre vectors')
+    values = values / np.linalg.norm(values, axis=1, keepdims=True)
 
     return ids, values, removed
 
@@ -222,24 +116,20 @@ def split_users(user_ids, user_values):
     return user_ids, user_values, splits
 
 
-def save_matrix(filename, id_column, ids, values, genres):
-    """Save IDs and their corresponding normalized genre vectors."""
-    result = pd.DataFrame(values, columns=genres)
-    result.insert(0, id_column, ids.to_numpy())
-
-    result.to_csv(
-        TRAINING_DATA_DIR / filename,
-        index=False,
-    )
-
-
-def main():
+# Mani's original approach saved prepared CSVs before training read them back.
+# Keep the handoff in memory: preparation is quick, the data fits in RAM, and
+# preparation and training run in the same job. Each run prepares the current
+# processed inputs, avoiding intermediate CSV writes and stale prepared files.
+# Reconsider persistent prepared datasets if preparation becomes expensive or
+# needs to run as a separate job.
+def prepare_data(user_path=USER_MATRIX_PATH, movie_path=MOVIE_MATRIX_PATH):
+    """Return normalized user splits, movie features and preparation metadata."""
     user_ids, users = read_matrix(
-        USER_MATRIX_PATH,
+        user_path,
         'userId',
     )
     movie_ids, movies = read_matrix(
-        MOVIE_MATRIX_PATH,
+        movie_path,
         'movieId',
     )
 
@@ -250,18 +140,10 @@ def main():
             f'movie-only={sorted(set(movies.columns) - set(users.columns))}'
         )
 
-    genres = [
-        column
-        for column in users.columns
-        if column != MISSING_GENRE
-    ]
+    genres = [column for column in users.columns if column != MISSING_GENRE]
 
     if not genres:
         raise ValueError('No usable genre columns')
-
-    # Validate binary movie features before normalization.
-    if not np.isin(movies.to_numpy(), [0, 1]).all():
-        raise ValueError('Movie genre features must be binary')
 
     input_users = len(user_ids)
     input_movies = len(movie_ids)
@@ -284,28 +166,6 @@ def main():
         user_values,
     )
 
-    TRAINING_DATA_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    for name, rows in splits.items():
-        save_matrix(
-            filename=f'users_{name}.csv',
-            id_column='userId',
-            ids=user_ids.iloc[rows],
-            values=user_values[rows],
-            genres=genres,
-        )
-
-    save_matrix(
-        filename='movies.csv',
-        id_column='movieId',
-        ids=movie_ids,
-        values=movie_values,
-        genres=genres,
-    )
-
     metadata = {
         'seed': RANDOM_SEED,
         'genres': genres,
@@ -318,17 +178,13 @@ def main():
             'test': TEST_RATIO,
         },
         'actual_split_ratios': {
-            name: len(rows) / len(user_ids)
-            for name, rows in splits.items()
+            name: len(rows) / len(user_ids) for name, rows in splits.items()
         },
         'input_users': input_users,
         'input_movies': input_movies,
         'removed_zero_users': removed_users,
         'removed_zero_movies': removed_movies,
-        'split_counts': {
-            name: len(rows)
-            for name, rows in splits.items()
-        },
+        'split_counts': {name: len(rows) for name, rows in splits.items()},
         'output_movies': len(movie_ids),
         'label_type': 'genre_cosine_pseudo_label',
         'evaluation_scope': (
@@ -336,12 +192,6 @@ def main():
             'not real preference or future interaction prediction.'
         ),
     }
-
-    metadata_path = TRAINING_DATA_DIR / 'metadata.json'
-    metadata_path.write_text(
-        json.dumps(metadata, indent=2),
-        encoding='utf-8',
-    )
 
     print(f'Removed users without genres: {removed_users}')
     print(f'Removed movies without genres: {removed_movies}')
@@ -351,8 +201,14 @@ def main():
 
     print(f'Movies: {len(movie_ids):,}')
     print(f'Genres: {len(genres)}')
-    print(f'Saved to: {TRAINING_DATA_DIR}')
+    metadata['source_files'] = [user_path.name, movie_path.name]
+    return {
+        'genres': genres,
+        'user_features': {name: user_values[rows] for name, rows in splits.items()},
+        'movies': movie_values,
+        'metadata': metadata,
+    }
 
 
 if __name__ == '__main__':
-    main()
+    prepare_data()

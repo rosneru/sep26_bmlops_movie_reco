@@ -1,53 +1,51 @@
+"""Shared data checks and the optional diagnostic command."""
+
 import numpy as np
 import pandas as pd
 
-from src.config import USER_MATRIX_PATH, MOVIE_MATRIX_PATH
+from src.config import MISSING_GENRE, MOVIE_MATRIX_PATH, USER_MATRIX_PATH
+
+
+def inspect_matrix(frame, id_column, *, binary=False):
+    if id_column not in frame.columns:
+        raise ValueError(f'Missing {id_column}')
+    columns = [name for name in frame.columns if name != id_column]
+    if frame.empty or not columns:
+        raise ValueError('Matrix must have rows and feature columns')
+    features = frame[columns].apply(pd.to_numeric, errors='coerce')
+    values = features.to_numpy(dtype=np.float64)
+    issues = {
+        'missing_id': (
+            frame[id_column].isna() | frame[id_column].astype(str).str.strip().eq('')
+        ).to_numpy(),
+        'missing_or_invalid_feature': ~np.isfinite(values).all(axis=1),
+        'feature_outside_0_1': (
+            np.isfinite(values) & ((values < 0) | (values > 1))
+        ).any(axis=1),
+        'non_binary_movie_feature': (
+            (np.isfinite(values) & ~np.isin(values, [0, 1])).any(axis=1)
+            if binary
+            else np.zeros(len(frame), dtype=bool)
+        ),
+    }
+    return features, issues
+
+
+def validate_matrix(frame, id_column, *, binary=False):
+    features, issues = inspect_matrix(frame, id_column, binary=binary)
+    errors = [name for name, mask in issues.items() if mask.any()]
+    if errors:
+        raise ValueError('Invalid matrix: ' + ', '.join(errors))
+    if frame[id_column].duplicated().any():
+        raise ValueError(f'Duplicate {id_column} values')
+    return features
 
 
 def load_matrix(path, id_column):
-    filename = path.name
-
-    if not path.is_file():
-        raise FileNotFoundError(f'File not found: {path}')
-
-    df = pd.read_csv(path)
-
-    if id_column not in df.columns:
-        raise ValueError(f'{filename}: missing {id_column}')
-
-    if df.empty:
-        raise ValueError(f'{filename}: empty dataset')
-
-    if df[id_column].isna().any():
-        raise ValueError(f'{filename}: missing IDs')
-
-    if df[id_column].duplicated().any():
-        raise ValueError(f'{filename}: duplicate IDs')
-
-    features = df.drop(columns=id_column).apply(
-        pd.to_numeric, errors='raise'
+    features = validate_matrix(
+        pd.read_csv(path), id_column, binary=id_column == 'movieId'
     )
-
-    if features.shape[1] == 0:
-        raise ValueError(f'{filename}: no feature columns')
-
-    values = features.to_numpy(dtype=np.float32)
-
-    if not np.isfinite(values).all():
-        raise ValueError(
-            f'{filename}: missing or infinite feature values'
-        )
-
-    if (values < 0).any() or (values > 1).any():
-        raise ValueError(
-            f'{filename}: feature values outside [0, 1]'
-        )
-
-    print(
-        f'{filename}: '
-        f'{len(df):,} rows, {len(features.columns)} features'
-    )
-
+    print(f'{path.name}: {len(features):,} rows, {len(features.columns)} features')
     return features
 
 
@@ -70,9 +68,7 @@ def main():
 
     # Missing genre information is not a meaningful genre.
     genre_columns = [
-        column
-        for column in users.columns
-        if column != '(no genres listed)'
+        column for column in users.columns if column != MISSING_GENRE
     ]
 
     if not genre_columns:
@@ -80,9 +76,6 @@ def main():
 
     user_genres = users[genre_columns]
     movie_genres = movies[genre_columns]
-
-    if not np.isin(movie_genres.to_numpy(), [0, 1]).all():
-        raise ValueError('Movie genre features must be binary')
 
     zero_users = int((user_genres.sum(axis=1) == 0).sum())
     zero_movies = int((movie_genres.sum(axis=1) == 0).sum())
