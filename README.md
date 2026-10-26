@@ -18,6 +18,11 @@ The data and pipeline outputs are not stored in Git. They are versioned with [DV
 
 To simulate data that arrives over time, DagsHub only holds the data that has "arrived" so far (the rating parts `1..split.current_part`, see section 4). The complete raw data and all rating parts are the local data source and are never pushed.
 
+The arrived data is in two places on DagsHub:
+
+- **DVC storage:** uploaded by `dvc push` (section 4), shown in the *Files* tab under `data/`.
+- **Repo bucket *DagsHub Storage*:** uploaded by the [data collection service](src/data_collection_service/README.md), shown on the repo page under *Storage Buckets*.
+
 ### 1. Get access to DagsHub (once)
 
 1. Create a DagsHub account and ask `rosneru` to add you as a collaborator with *Write* access.
@@ -99,9 +104,11 @@ To add the next part:
    git push           # ... before others pull the commit
    ```
 
-   `dvc push` uploads the new part. That is the moment the part "arrives" on DagsHub.
+   `dvc push` uploads the new part to the DVC storage.
 
 Since `params.yaml` and `dvc.lock` are versioned in Git, every commit documents which data was used. `git checkout <commit>` followed by `uv run dvc pull` restores the ingested data and the matrices of that state.
+
+Alternatively, the [data collection service](src/data_collection_service/README.md) uploads the parts to the repo bucket.
 
 ## Testing the predict API locally
 
