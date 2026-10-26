@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from config import USER_MATRIX_PATH, MOVIE_MATRIX_PATH
+from src.config import USER_MATRIX_PATH, MOVIE_MATRIX_PATH
 
 
 def load_matrix(path, id_column):
