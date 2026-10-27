@@ -20,12 +20,12 @@ test-dcs-part:
      -d '{"requested_up_to": 2}'
 
 # Without body
-# Will later respond the current_part from params.yaml
+# Requests the data up to current_part from params.yaml
 test-dcs-no-body:
 	curl -i -X POST localhost:8001/ingest
 
 # Request Invalid value 0,
-# Will later return 422
+# Returns 422
 test-dcs-invalid:
 	curl -i -X POST localhost:8001/ingest \
      -H 'Content-Type: application/json' \
