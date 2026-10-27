@@ -15,7 +15,11 @@ MODEL_PATH = MODELS_DIR / 'model.pkl'
 N_RECOMMENDATIONS = 10
 
 # Model
-TRAINING_DATA_DIR = PROCESSED_DATA_DIR / 'two_tower'
+MODEL_TYPE = os.getenv("MODEL_TYPE", "knn").strip().lower()
+
+KNN_NEIGHBORS = 20
+KNN_ALGORITHM = 'ball_tree'
+
 RANDOM_SEED = 42
 MISSING_GENRE = '(no genres listed)'
 
@@ -42,8 +46,28 @@ MLFLOW_TRACKING_URI = os.getenv(
     'MLFLOW_TRACKING_URI',
     'http://localhost:5000',
 )
-MLFLOW_EXPERIMENT_NAME = 'movie-genre-two-tower'
-MLFLOW_RUN_NAME = 'two-tower-genre-cosine'
-MLFLOW_REGISTERED_MODEL_NAME = 'movie-genre-two-tower'
+
+MODEL_NAMES = {
+    'knn': {
+        'experiment': 'movie-genre-knn',
+        'run': 'knn-genre-neighbors',
+        'registry': 'movie-genre-knn',
+    },
+    'two_tower': {
+        'experiment': 'movie-genre-two-tower',
+        'run': 'two-tower-genre-cosine',
+        'registry': 'movie-genre-two-tower',
+    },
+}
+
+if MODEL_TYPE not in MODEL_NAMES:
+    raise ValueError(
+        f"Unsupported MODEL_TYPE: {MODEL_TYPE}. "
+        f"Choose one of: {', '.join(MODEL_NAMES)}"
+    )
+
+MLFLOW_EXPERIMENT_NAME = MODEL_NAMES[MODEL_TYPE]['experiment']
+MLFLOW_RUN_NAME = MODEL_NAMES[MODEL_TYPE]['run']
+MLFLOW_REGISTERED_MODEL_NAME = MODEL_NAMES[MODEL_TYPE]['registry']
 
 MLFLOW_SERIALIZATION_FORMAT = 'pickle'

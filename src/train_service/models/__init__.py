@@ -1,5 +1,9 @@
-"""Select the sole supported implementation; no plugin framework is needed."""
+"""Select the configured training implementation."""
 
-from . import two_tower as implementation
+from importlib import import_module
 
-__all__ = ['implementation']
+from src import config
+
+implementation = import_module(f".{config.MODEL_TYPE}", package=__name__)
+
+__all__ = ["implementation"]

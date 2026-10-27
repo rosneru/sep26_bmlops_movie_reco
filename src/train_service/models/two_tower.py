@@ -325,12 +325,22 @@ def export(
     # Metrics are logged directly to the MLflow run in train_model.py;
     # a separate metrics.json file would duplicate them.
 
+    # Flatten the shared and model-specific files so the exported environment
+    # does not depend on a relative requirements-file include.
+    requirements_dir = source_root / 'train_service'
+    pip_requirements = (requirements_dir / 'requirements.txt').read_text().splitlines()
+    pip_requirements += [
+        line for line in
+        (requirements_dir / 'requirements-two-tower.txt').read_text().splitlines()
+        if not line.startswith('-r ')
+    ]
+
     mlflow.pytorch.save_model(
         pytorch_model=result['model'],
         path=str(model_dir),
         serialization_format=resolved_parameters['serialization_format'],
         code_paths=[str(source_root)],
-        pip_requirements=str(source_root / 'train_service' / 'requirements.txt'),
+        pip_requirements=pip_requirements,
         metadata={
             'source_training_run_id': run_id,
             'training_parameters': resolved_parameters,
