@@ -1,7 +1,7 @@
 # This must be called from the project root, because the image needs
 # 'uv.lock', 'models/' and 'data/processed/':
 #   docker build -f src/predict_service/Dockerfile -t movie-reco-api .
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 # uv is a single binary, copied from the official image
 COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /bin/

@@ -22,3 +22,10 @@ wheels/
 
 # Editor / OS
 .DS_Store
+
+# model
+*.Python
+*.json
+
+# Obsolete intermediate training datasets; preparation now runs in memory
+/data/processed/two_tower/

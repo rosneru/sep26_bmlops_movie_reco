@@ -14,8 +14,8 @@ import config
 MODEL_PATH = Path(os.getenv('MODEL_PATH', config.MODEL_PATH))
 USER_MATRIX_PATH = Path(os.getenv('USER_MATRIX_PATH', config.USER_MATRIX_PATH))
 MOVIE_MATRIX_PATH = Path(os.getenv('MOVIE_MATRIX_PATH', config.MOVIE_MATRIX_PATH))
+from config import N_RECOMMENDATIONS
 
-N_RECOMMENDATIONS = 10
 
 # Loading the trained model and the matrices once at startup
 try:
