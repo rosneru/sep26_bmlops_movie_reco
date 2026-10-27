@@ -31,11 +31,15 @@ services:
 
   # One-off job, invoked explicitly; normal compose up does not train a model.
   train:
+    image: movie-reco-train:${MODEL_TYPE:-knn}
     profiles: [training]
     build:
       context: .
       dockerfile: src/train_service/Dockerfile
+      args:
+        MODEL_TYPE: ${MODEL_TYPE:-knn}
     environment:
+      MODEL_TYPE: ${MODEL_TYPE:-knn}
       MLFLOW_TRACKING_URI: http://mlflow:5000
     volumes:
       - ./data/processed:/app/data/processed:ro

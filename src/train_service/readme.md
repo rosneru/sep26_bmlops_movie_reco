@@ -1,3 +1,48 @@
+# Training model selection
+
+KNN is the default. Run these commands from the repository root in WSL Bash.
+The build selects the dependencies and stores the matching MODEL_TYPE in the image.
+
+Set `MODEL_TYPE=knn` or `MODEL_TYPE=two_tower` in the root `.env`, then run:
+
+```bash
+docker compose build train
+docker compose run --rm train
+```
+
+Compose passes only explicitly listed environment variables to each service.
+Training receives MODEL_TYPE and MLFLOW_TRACKING_URI. The same MODEL_TYPE selects
+the image tag and build dependencies. It selects a training candidate, not the
+model served by prediction. Prediction still uses the existing KNN artifact;
+future integration should select its registered model and version independently.
+Airflow can later coordinate training, validation, and promotion without making
+every service share the same model selection or credentials.
+
+The following one-command overrides take precedence over `.env`:
+
+```bash
+# Lightweight KNN image, without PyTorch
+MODEL_TYPE=knn docker compose build train
+MODEL_TYPE=knn docker compose run --rm train
+
+# CPU two-tower image, with PyTorch
+MODEL_TYPE=two_tower docker compose build train
+MODEL_TYPE=two_tower docker compose run --rm train
+```
+
+Each model has a separate image tag. Build each image before its first run and
+rebuild after changing source code or dependencies.
+Do not override MODEL_TYPE using `run -e`; that does not change installed dependencies.
+`requirements.txt` contains shared dependencies; `requirements-two-tower.txt` adds CPU
+PyTorch. Each export records its corresponding dependencies in MLflow. KNN registers
+as `movie-genre-knn`; two-tower registers as `movie-genre-two-tower`.
+KNN fits raw genre vectors and exports `training_schema.json` with genre and movie-ID
+order. It does not report recommendation-quality metrics. The validator commands
+below are specific to two-tower and have not been adapted for KNN.
+
+The following sections describe the two-tower workflow; build the two-tower image
+before following them.
+
 # Two-Tower Training and MLflow
 
 A PyTorch Two-Tower model that approximates genre similarity between users and movies. Original `(userId, movieId, rating)` interactions are not consumed by this training pipeline, so targets are generated on demand using genre cosine similarity. This does **not** demonstrate learning actual user preferences.
@@ -32,7 +77,8 @@ local Python environment, PyTorch or MLflow installation is required.
 Configure the root `.env` from `.env.example`, including the Grafana credentials
 required when Compose reads the configuration.
 
-Training dependencies are declared in `src/train_service/requirements.txt`.
+Shared dependencies are declared in `src/train_service/requirements.txt`;
+`requirements-two-tower.txt` adds CPU PyTorch.
 The training image does not copy the root `pyproject.toml` or `uv.lock`.
 The same service requirements are explicitly included in the exported MLflow model.
 Direct dependency versions are pinned; indirect dependency versions are not fully locked.
@@ -41,6 +87,7 @@ The MLflow client and server are pinned to 3.17.2, and training uses CPU-only Py
 Build the images:
 
 ```bash
+export MODEL_TYPE=two_tower
 docker compose build train mlflow
 ```
 
@@ -198,19 +245,21 @@ Do not use `docker compose down -v` when data must be retained: it deletes Compo
 ```text
 src/train_service/
   Dockerfile              # Build the training image
-  requirements.txt        # Training and exported-model dependencies
+  requirements.txt        # Shared lightweight dependencies
+  requirements-two-tower.txt # CPU PyTorch additions
   train_model.py          # MLflow run, training call, upload and registration
   prepare_data.py         # Clean, normalize and split inputs in memory
   check_data.py           # Shared quality checks and optional strict diagnostic
   evaluate.py             # Sampled genre-cosine RMSE and MAE
   models/
-    __init__.py           # Select two_tower as the implementation
+    __init__.py           # Import the configured implementation
+    knn.py                # Genre neighbors and movie-ID schema export
     two_tower.py          # Network, training loop and MLflow model packaging
 ```
 
 Defaults are in `src/config.py`. Rebuild the training image after changing those
 settings, source code or requirements; these files are copied into the image.
-There is currently one model implementation, two-tower, with no KNN selector.
+The selector imports only the model configured by MODEL_TYPE.
 
 ## What is recorded and what is not
 
