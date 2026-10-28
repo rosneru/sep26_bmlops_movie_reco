@@ -8,4 +8,5 @@
 .env
 **/__pycache__
 data/raw
+!data/raw/movies.csv
 notebooks

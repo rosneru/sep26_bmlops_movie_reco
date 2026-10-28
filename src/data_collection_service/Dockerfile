@@ -1,6 +1,6 @@
 # This must be called from the project root, because the image needs
-# 'uv.lock', 'models/' and 'data/processed/':
-#   docker build -f src/predict_service/Dockerfile -t movie-reco-api .
+# 'uv.lock', 'params.yaml', 'data/raw/movies.csv' and 'data/interim/':
+#   docker build -f src/data_collection_service/Dockerfile -t movie-reco-data-collection .
 FROM python:3.12-slim
 
 # uv is a single binary, copied from the official image
@@ -15,10 +15,11 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-default-groups --no-install-project --no-cache
 
 # Mirror the project layout, so the default paths from config.py work
-COPY data/processed/user_matrix.csv data/processed/movie_matrix.csv data/processed/
-COPY data/interim/*.csv data/interim/
+COPY params.yaml ./
+COPY data/raw/movies.csv data/raw/
+COPY data/interim/ratings_parts/*.csv data/interim/ratings_parts/
 COPY src/config.py src/
-COPY src/data_collection_service/main.py src/data_collection_service/ingest.py src/data_collection_service/
+COPY src/data_collection_service/main.py src/data_collection_service/ingest.py src/data_collection_service/bucket_storage_client.py src/data_collection_service/
 
 # Use the virtual environment created by 'uv sync'
 ENV PATH="/app/.venv/bin:$PATH"
