@@ -15,19 +15,19 @@ run-dcs: .env
 # Test the data collection service
 # Requests the data up to part 2
 test-dcs-part:
-	curl -i -X POST localhost:8001/ingest \
+	curl -i -X POST localhost:8001/ingest -u admin:admin123 \
      -H 'Content-Type: application/json' \
      -d '{"requested_up_to": 2}'
 
 # Without body
 # Requests the data up to current_part from params.yaml
 test-dcs-no-body:
-	curl -i -X POST localhost:8001/ingest
+	curl -i -X POST localhost:8001/ingest -u admin:admin123
 
 # Request Invalid value 0,
 # Returns 422
 test-dcs-invalid:
-	curl -i -X POST localhost:8001/ingest \
+	curl -i -X POST localhost:8001/ingest -u admin:admin123 \
      -H 'Content-Type: application/json' \
      -d '{"requested_up_to": 0}'
 
@@ -38,7 +38,7 @@ run-api-container:
 	docker run --rm -p 8000:8000 movie-reco-api
 
 test-api:
-	curl -X POST 'localhost:8000/predict' \
+	curl -X POST 'localhost:8000/predict' -u alice:alice123 \
      -H 'Content-Type: application/json' \
      -d '{"user_ids": [21525]}'
 
