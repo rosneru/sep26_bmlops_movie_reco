@@ -8,5 +8,4 @@
 .env
 **/__pycache__
 data/raw
-data/interim
 notebooks
