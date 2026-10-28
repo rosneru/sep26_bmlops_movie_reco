@@ -9,8 +9,9 @@
 
 # Start the data collection service API,
 # just for testing/debugging
-run-dcs: .env
-	uv run uvicorn data_collection_service.main:api --app-dir src --port 8001 --reload --env-file .env
+#	uv run uvicorn data_collection_service.main:api --app-dir src --port 8001 --reload --env-file .env
+run-dcs: .env src/data_collection_service/Dockerfile
+	docker run --env-file .env -p 8001:8001 movie-reco-data-collection
 
 # Test the data collection service
 # Requests the data up to part 2

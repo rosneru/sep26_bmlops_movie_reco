@@ -19,6 +19,11 @@ jobs:
     env:
       GRAFANA_ADMIN_USER: ci-admin
       GRAFANA_ADMIN_PASSWORD: disposable-ci-password
+      # The data collection service only needs real values for /ingest,
+      # which this workflow does not call
+      DAGSHUB_S3_ENDPOINT_URL: https://example.invalid
+      DAGSHUB_BUCKET: ci-dummy-bucket
+      DAGSHUB_TOKEN: ci-dummy-token
 
     steps:
       - name: Check out repository

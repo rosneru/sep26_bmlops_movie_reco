@@ -11,6 +11,28 @@ x-api-healthcheck: &api-healthcheck
   start_interval: 1s
 
 services:
+  data_collection:
+    build:
+      context: .
+      dockerfile: src/data_collection_service/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    # The input data is local-only (not in git), so it is mounted instead of
+    # copied into the image. Missing folders (e.g. in CI) are created empty.
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+      - ./data/interim/ratings_parts:/app/data/interim/ratings_parts:ro
+    environment:
+      # NOTE: Docker Compose reads the .env file next to this file on every
+      # 'docker compose ...' call (values from the shell take precedence) and
+      # substitutes the ${...} placeholders with them. The key left of the ':'
+      # is the name of the environment variable inside the container.
+      # ':?' aborts the whole command with the given message if the variable
+      # is missing or empty.
+      DAGSHUB_S3_ENDPOINT_URL: ${DAGSHUB_S3_ENDPOINT_URL:?Set DAGSHUB_S3_ENDPOINT_URL in the root .env file or your shell}
+      DAGSHUB_BUCKET: ${DAGSHUB_BUCKET:?Set DAGSHUB_BUCKET in the root .env file or your shell}
+      DAGSHUB_TOKEN: ${DAGSHUB_TOKEN:?Set DAGSHUB_TOKEN in the root .env file or your shell}
 
   mlflow:
     build:
