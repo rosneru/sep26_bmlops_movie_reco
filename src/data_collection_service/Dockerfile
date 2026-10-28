@@ -1,5 +1,5 @@
 # This must be called from the project root, because the image needs
-# 'uv.lock', 'params.yaml', 'data/raw/movies.csv' and 'data/interim/':
+# 'uv.lock' and 'params.yaml':
 #   docker build -f src/data_collection_service/Dockerfile -t movie-reco-data-collection .
 FROM python:3.12-slim
 
@@ -14,10 +14,10 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-default-groups --no-install-project --no-cache
 
-# Mirror the project layout, so the default paths from config.py work
+# Mirror the project layout, so the default paths from config.py work.
+# 'data/raw/' and 'data/interim/ratings_parts/' are not copied but mounted
+# as volumes (see docker-compose.yml): they are local-only and not in git.
 COPY params.yaml ./
-COPY data/raw/movies.csv data/raw/
-COPY data/interim/ratings_parts/*.csv data/interim/ratings_parts/
 COPY src/config.py src/
 COPY src/data_collection_service/main.py src/data_collection_service/ingest.py src/data_collection_service/bucket_storage_client.py src/data_collection_service/
 
