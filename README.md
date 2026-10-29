@@ -127,7 +127,7 @@ Stop the API by pressing `<Ctrl + c>` in the terminal where it runs.
 **With curl** (in a second terminal):
 
 ```bash
-curl -X POST localhost:8000/predict \
+curl -X POST localhost:8000/predict -u alice:alice123 \
      -H 'Content-Type: application/json' \
      -d '{"user_ids": [21525]}'
 ```
@@ -135,6 +135,23 @@ curl -X POST localhost:8000/predict \
 The response contains 10 recommended `movieId`s per user. They are chosen randomly from the 20 nearest movies and vary from call to call. Add a seed (e.g. `"seed": 42`) to get reproducible results. Only users who rated a movie in the parts `1..split.current_part` are known. Others return `404`. For example, user `21525` is known from part 1 on, while user `1` only appears in later parts.
 
 With the provided `Makefile` you can run this call by typing: `make test-api`.
+
+### Authentication
+
+The APIs need credentials, sent either with Basic auth (username and password) or as a Bearer token. The demo users are defined in `src/user_authentication_service/auth.py`:
+
+| User    | Password   | Token         | Access                                    |
+| ------- | ---------- | ------------- | ----------------------------------------- |
+| `admin` | `admin123` | `admin-token` | all services (`/predict`, `/ingest`)      |
+| `alice` | `alice123` | `alice-token` | only `/predict`                           |
+| `bob`   | `bob123`   | `bob-token`   | only `/predict`                           |
+
+```bash
+curl -X POST localhost:8000/predict -u alice:alice123 ...                     # Basic
+curl -X POST localhost:8000/predict -H 'Authorization: Bearer alice-token' ...  # Bearer
+```
+
+Missing or wrong credentials return `401`, a user without access returns `403`. In the browser docs, click *Authorize* first. See the [user authentication service](src/user_authentication_service/README.md) for how it works and how to protect a new endpoint.
 
 ## Testing the predict API Dockerfile
 

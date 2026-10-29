@@ -20,6 +20,7 @@ RUN uv sync --frozen --no-default-groups --no-install-project --no-cache
 COPY params.yaml ./
 COPY src/config.py src/
 COPY src/data_collection_service/main.py src/data_collection_service/ingest.py src/data_collection_service/bucket_storage_client.py src/data_collection_service/
+COPY src/user_authentication_service/ src/user_authentication_service/
 
 # Use the virtual environment created by 'uv sync'
 ENV PATH="/app/.venv/bin:$PATH"

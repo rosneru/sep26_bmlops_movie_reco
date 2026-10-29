@@ -32,6 +32,8 @@ quote-style = "single"
 
 [dependency-groups]
 dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
     "ruff>=0.17.1",
 ]
 dvc = [

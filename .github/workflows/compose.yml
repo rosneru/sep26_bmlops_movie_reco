@@ -49,6 +49,7 @@ jobs:
           curl --fail-with-body --show-error --silent \
             --connect-timeout 5 \
             --max-time 30 \
+            -u alice:alice123 \
             -X POST http://localhost:8000/predict \
             -H 'Content-Type: application/json' \
             -d '{"user_ids":[1],"seed":42}'

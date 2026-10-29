@@ -4,10 +4,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 import config
+from user_authentication_service.auth import require_predict_access
 
 # Paths can be overridden via environment variables (e.g. inside a Docker
 # container). The defaults from config.py point to the project directory.
@@ -62,7 +63,7 @@ class PredictRequest(BaseModel):
 
 
 # prediction endpoint
-@app.post('/predict')
+@app.post('/predict', dependencies=[Depends(require_predict_access)])
 def predict(request: PredictRequest):
     unknown_ids = [i for i in request.user_ids if i not in user_matrix.index]
     if unknown_ids:

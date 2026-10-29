@@ -19,6 +19,7 @@ COPY models/model.pkl models/
 COPY data/processed/user_matrix.csv data/processed/movie_matrix.csv data/processed/
 COPY src/config.py src/
 COPY src/predict_service/predict.py src/predict_service/
+COPY src/user_authentication_service/ src/user_authentication_service/
 
 # Use the virtual environment created by 'uv sync'
 ENV PATH="/app/.venv/bin:$PATH"
