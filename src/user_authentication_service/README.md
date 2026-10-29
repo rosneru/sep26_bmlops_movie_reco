@@ -53,7 +53,7 @@ request ──► HTTPBasic / HTTPBearer ──► get_current_user ──► re
 ```
 
 1. **`basic_scheme` and `bearer_scheme`** (FastAPI's `HTTPBasic` and `HTTPBearer`) read the `Authorization` header. They use `auto_error=False`, so a missing header gives `None` instead of an immediate `401`. Otherwise a Bearer request would be rejected by the Basic scheme before its token is checked.
-2. **`get_current_user`** looks up the Basic username and compares the password, or searches the user whose token matches. It returns `{'username': ..., 'role': ...}` or raises `401`. The comparison uses `secrets.compare_digest`, which takes the same time for any input, so the response time gives no hint how much of a password was right (timing attack).
+2. **`get_current_user`** looks up the Basic username and compares the password, or searches the user whose token matches. It returns `{'username': ..., 'role': ...}` or raises `401`. The comparison uses `secrets.compare_digest` to reduce timing differences caused by matching credential contents. **It does not make the entire authentication operation constant-time:** unknown usernames take a different lookup path, tokens are checked against users in a loop, and input length or other operations may affect response timing. It is one defense against timing attacks, not a guarantee of timing-attack resistance.
 3. **`require_role(*roles)`** creates a dependency that first runs `get_current_user` and then raises `403` if the role is not in `roles`.
 
 The ready-made rules are:
@@ -106,3 +106,37 @@ This is kept simple for the training project. A production system would:
 - serve the APIs over HTTPS only, since Basic credentials are only Base64-encoded, not encrypted
 
 MLflow, Prometheus and Grafana are third-party tools and are not protected by this module. Grafana has its own login (see `.env`).
+
+## Automated authentication tests
+
+From the repository root, install the development dependencies and run:
+
+```bash
+uv sync --group dev
+PYTHONPATH=src uv run pytest -q tests/auth
+```
+
+The tests check missing and invalid Basic credentials, unknown bearer tokens, valid
+users, and the `/ingest` admin-only rule. They also exercise the real `/predict`
+route with lightweight fake ML artifacts: an **unknown login username** is rejected
+with `401`, whereas a valid account requesting an **unknown MovieLens user ID**
+is rejected with `404`. No external dataset or Docker service is required.
+
+### Test an unknown user manually
+
+Run the prediction API as described in the main README, then in another shell:
+
+```bash
+# Unknown authentication account -> HTTP 401
+curl -i -u 'nonexistent:some-password' \
+  -H 'Content-Type: application/json' \
+  -d '{"user_ids":[21525]}' http://localhost:8000/predict
+
+# Known account, nonexistent MovieLens profile -> HTTP 404
+curl -i -u 'alice:alice123' \
+  -H 'Content-Type: application/json' \
+  -d '{"user_ids":[999999999]}' http://localhost:8000/predict
+```
+
+The second test assumes ID `999999999` does not exist in the currently loaded
+user matrix. These fixed demo credentials are **not suitable for deployment**.

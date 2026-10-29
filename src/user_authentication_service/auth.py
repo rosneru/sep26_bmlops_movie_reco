@@ -30,8 +30,8 @@ def get_current_user(
     bearer: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> dict:
     """Returns the user that sent valid Basic or Bearer credentials."""
-    # compare_digest takes the same time for any input, so the response time
-    # gives no hint about how much of a password or token was right
+    # compare_digest reduces content-dependent timing differences during
+    # comparisons; it does not make the full authentication path constant-time.
     if basic is not None:
         user = USERS.get(basic.username)
         if user and secrets.compare_digest(basic.password, user['password']):
