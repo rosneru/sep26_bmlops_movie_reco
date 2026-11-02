@@ -10,6 +10,16 @@ x-api-healthcheck: &api-healthcheck
   start_period: 30s
   start_interval: 1s
 
+x-airflow-common: &airflow-common
+  image: apache/airflow:3.3.2
+  environment:
+    # The generated password uses URL-safe hexadecimal characters.
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_POSTGRES_USER:-airflow}:${AIRFLOW_POSTGRES_PASSWORD:?Set AIRFLOW_POSTGRES_PASSWORD in .env}@airflow-postgres:5432/${AIRFLOW_POSTGRES_DB:-airflow}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  depends_on:
+    airflow-postgres:
+      condition: service_healthy
+
 services:
   data_collection:
     build:
@@ -106,6 +116,36 @@ services:
     depends_on:
       - prometheus
 
+  airflow-postgres:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${AIRFLOW_POSTGRES_USER:-airflow}
+      POSTGRES_PASSWORD: ${AIRFLOW_POSTGRES_PASSWORD:?Set AIRFLOW_POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${AIRFLOW_POSTGRES_DB:-airflow}
+    # Internal network only: no host port or collision with existing databases.
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # One-off initialization; exit code 0 means migrations completed successfully.
+  airflow-init:
+    <<: *airflow-common
+    profiles: [airflow-init]
+    command: ["db", "migrate"]
+    restart: "no"
+
 volumes:
   prometheus_data:
   grafana_data:
+
+  # Reuse the database volume created during the initial Airflow setup.
+  # External ownership prevents Compose down -v from removing this database.
+  airflow_postgres_data:
+    external: true
+    name: movie-reco-airflow-postgres-data
