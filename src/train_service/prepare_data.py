@@ -206,6 +206,7 @@ def prepare_data(user_path=USER_MATRIX_PATH, movie_path=MOVIE_MATRIX_PATH):
         'genres': genres,
         'user_features': {name: user_values[rows] for name, rows in splits.items()},
         'movies': movie_values,
+        'movie_ids': movie_ids.to_numpy(),
         'metadata': metadata,
     }
 
