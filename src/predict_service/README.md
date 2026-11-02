@@ -73,20 +73,26 @@ A registry outage prevents a fresh startup; already running replicas keep their
 in-memory model. No live reload or offline cache fallback is implemented.
 
 The prediction images use service-specific pinned requirements matching training's
-NumPy, pandas, scikit-learn and MLflow versions. PyTorch is installed only in the
+NumPy, pandas, scikit-learn and MLflow client versions. Both clients use
+mlflow-skinny; only the disposable test server needs full MLflow. PyTorch is installed only in the
 two-tower image. Root uv.lock is not the prediction image dependency source.
 
 ## Validation
 
 The Compose CI uses docker-compose.test.yml to train/register a small synthetic
 KNN model in its disposable local MLflow server before starting the API, then requests predictions through Nginx.
-Local integration tests use temporary SQLite registries and artifacts:
+The slim clients connect over HTTP to the disposable test server, which owns the
+SQLite database. They do not need server/database dependencies installed locally.
+Run tests in a fresh test project (the final command deletes only its test volumes):
 
 ```bash
-docker run --rm --network none --entrypoint python \
-  -v "$PWD/tests:/app/tests:ro" movie-reco-predict:knn \
+docker compose -p movie-reco-test -f docker-compose.yml -f docker-compose.test.yml up -d --build --wait mlflow
+docker compose -p movie-reco-test -f docker-compose.yml -f docker-compose.test.yml run --rm --no-deps --build --entrypoint python \
+  -e MLFLOW_TEST_TRACKING_URI=http://mlflow:5000 \
+  -v "$PWD/tests:/app/tests:ro" predict \
   -m unittest discover -s /app/tests/prediction -v
+docker compose -p movie-reco-test -f docker-compose.yml -f docker-compose.test.yml down -v
 ```
 
-Use the two_tower image for optional PyTorch coverage. Synthetic tests check the
-integration and alignment, not real recommendation performance.
+Use PREDICT_MODEL_TYPE=two_tower for optional PyTorch coverage. Synthetic tests
+check the integration and alignment, not real recommendation performance.

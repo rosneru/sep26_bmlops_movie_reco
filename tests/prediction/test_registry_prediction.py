@@ -31,7 +31,9 @@ class RegistryPredictionTests(unittest.TestCase):
         cls.env = patch.dict(
             os.environ,
             {
-                'MLFLOW_TRACKING_URI': f'sqlite:///{cls.root}/registry.db',
+                'MLFLOW_TRACKING_URI': os.getenv(
+                    'MLFLOW_TEST_TRACKING_URI', f'sqlite:///{cls.root}/registry.db'
+                ),
                 'PREDICT_MODEL_TYPE': 'knn',
                 'PREDICT_MODEL_NAME': 'review-knn',
                 'PREDICT_MODEL_VERSION': '1',
