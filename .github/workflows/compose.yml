@@ -57,6 +57,7 @@ jobs:
       - name: Test versioned registry loading
         run: |
           docker compose run --rm --no-deps --entrypoint python \
+            -e MLFLOW_TEST_TRACKING_URI=http://mlflow:5000 \
             -v "$PWD/tests:/app/tests:ro" predict \
             -m unittest discover -s /app/tests/prediction -v
 
