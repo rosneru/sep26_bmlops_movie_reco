@@ -215,7 +215,70 @@ Open [MLflow](http://localhost:5000).
 - **Artifacts -> model:** the loadable MLflow model, including weights, code and metadata.
 - **Model registry -> movie-genre-two-tower -> version -> Tags:** visible model metadata.
 
-Training does not retain a separate local output directory. MLflow keeps SQLite at `/mlflow/mlflow.db` and artifacts under `/mlflow/artifacts`, persisted by the named volume mounted at `/mlflow`.
+### Where trained models live
+
+Models are stored in a **Docker named volume**, not in the repository and not in
+an individual container's writable filesystem.
+
+| Location inside the MLflow container | Contents |
+| --- | --- |
+| `/mlflow/artifacts` | Run artifacts: exported models/weights, dependencies, metadata, and serving catalogs |
+| `/mlflow/mlflow.db` | SQLite database: experiments, runs, parameters, metrics, and model registry versions/tags |
+
+The registry records which version points to which artifact; it does not keep a
+second copy of the model weights. Each run's artifact directory is managed by
+MLflow, so use the UI to find a particular model rather than guessing its subpath.
+The repository's `models/model.pkl` is an older local artifact and is not the
+output of this training workflow.
+
+### How the code connects these locations
+
+1. `src/train_service/train_model.py`: `mlflow.log_artifacts(...)` uploads the
+   temporary export, and `mlflow.register_model(...)` registers its run URI.
+   The temporary training export directory is deleted after use.
+2. `src/mlflow_service/Dockerfile`: `--backend-store-uri sqlite:////mlflow/mlflow.db`
+   selects the database; `--artifacts-destination /mlflow/artifacts` selects artifact
+   storage. `--serve-artifacts` lets clients upload/download through the server.
+3. Root `docker-compose.yml`: `mlflow_data:/mlflow` mounts the named volume over
+   `/mlflow`, preserving both the database and artifacts independently of the
+   container. The top-level `volumes: mlflow_data:` declares that volume.
+
+### Persistence and deletion
+
+| Action | Stored models and registry |
+| --- | --- |
+| Stop/restart services | Preserved |
+| Rebuild images | Preserved |
+| Remove/recreate the MLflow container using the same volume | Preserved |
+| `docker compose down` | Preserved |
+| `docker compose down -v` or delete the MLflow volume | Deleted |
+
+The volume normally has the project-prefixed name `movie-reco_mlflow_data`.
+Changing the Compose project name can attach a different empty volume; the old
+volume may still exist. Storage is local to this Docker installation and is not
+shared with teammates or another machine. A Docker Desktop reset, disk failure,
+or volume deletion can lose it. **Persistent storage is not a backup**; a
+recoverable backup needs both the database and artifacts from a consistent state.
+
+### Find and inspect storage
+
+Run from the repository root in WSL Bash:
+
+```bash
+# List artifact directories inside the server container.
+docker compose exec mlflow ls -lah /mlflow/artifacts
+
+# Show the volume currently mounted on the actual MLflow container.
+docker inspect "$(docker compose ps -q mlflow)" --format '{{json .Mounts}}'
+
+# Inspect the normal project-prefixed volume.
+docker volume inspect movie-reco_mlflow_data
+```
+
+The reported volume mountpoint is inside Docker Desktop's Linux environment; it
+is not a folder under this repository. Prefer MLflow's UI or artifact download
+APIs for accessing individual models rather than modifying volume files directly.
+
 
 Inspect the container without assuming Bash is installed:
 
@@ -238,7 +301,7 @@ Stop services while preserving data:
 docker compose stop
 ```
 
-Do not use `docker compose down -v` when data must be retained: it deletes Compose-managed volumes. Starting the Prediction Service does not automatically connect it to the newly registered model.
+Do not use `docker compose down -v` when data must be retained: it deletes Compose-managed volumes. Prediction loads the newest registered version at startup by default; restart it after training to load a new version. See [prediction setup](../predict_service/README.md).
 
 ## Files and responsibilities
 

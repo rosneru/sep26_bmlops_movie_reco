@@ -2,14 +2,15 @@
 
 import copy
 import json
+from pathlib import Path
 
 import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
 
-from src.train_service.prepare_data import prepare_data
 from src.train_service.evaluate import evaluate
+from src.train_service.prepare_data import prepare_data
 
 
 class TwoTower(nn.Module):
@@ -349,3 +350,11 @@ def export(
             'label_type': 'genre_cosine_pseudo_label',
         },
     )
+
+    model_dir = Path(model_dir)
+    (model_dir / 'training_schema.json').write_text(json.dumps({
+        'genres': data['genres'],
+        'movie_ids': data['movie_ids'].tolist(),
+        'normalization': 'row_l2',
+    }, indent=2), encoding='utf-8')
+    np.save(model_dir / 'movie_features.npy', data['movies'].cpu().numpy())

@@ -70,9 +70,22 @@ services:
         condition: service_healthy
 
   predict:
+    image: movie-reco-predict:${PREDICT_MODEL_TYPE:-knn}
     build:
       context: .
       dockerfile: src/predict_service/Dockerfile
+      args:
+        PREDICT_MODEL_TYPE: ${PREDICT_MODEL_TYPE:-knn}
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      PREDICT_MODEL_TYPE: ${PREDICT_MODEL_TYPE:-knn}
+      PREDICT_MODEL_NAME: ${PREDICT_MODEL_NAME:-movie-genre-knn}
+      PREDICT_MODEL_VERSION: ${PREDICT_MODEL_VERSION:-latest}
+    volumes:
+      - ./data/processed:/app/data/processed:ro
+    depends_on:
+      mlflow:
+        condition: service_healthy
     expose:
       - "8000"
     deploy:
