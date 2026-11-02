@@ -1,28 +1,20 @@
-# This must be called from the project root, because the image needs
-# 'uv.lock', 'models/' and 'data/processed/':
-#   docker build -f src/predict_service/Dockerfile -t movie-reco-api .
-FROM python:3.12-slim
-
-# uv is a single binary, copied from the official image
-COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /bin/
+ARG PREDICT_MODEL_TYPE=knn
+FROM python:3.12-slim AS base
 
 WORKDIR /app
+COPY src/predict_service/requirements*.txt ./
 
-# Install the dependencies first, so this layer stays cached as long as
-# 'pyproject.toml' and 'uv.lock' are unchanged. '--no-default-groups' leaves
-# out the groups 'dev' and 'dvc', which the API does not need.
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-default-groups --no-install-project --no-cache
+FROM base AS knn
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Mirror the project layout, so the default paths from config.py work
-COPY models/model.pkl models/
-COPY data/processed/user_matrix.csv data/processed/movie_matrix.csv data/processed/
-COPY src/config.py src/
-COPY src/predict_service/predict.py src/predict_service/
-COPY src/user_authentication_service/ src/user_authentication_service/
+FROM base AS two_tower
+RUN pip install --no-cache-dir -r requirements-two-tower.txt
 
-# Use the virtual environment created by 'uv sync'
-ENV PATH="/app/.venv/bin:$PATH"
-
+FROM ${PREDICT_MODEL_TYPE} AS runtime
+COPY src/ src/
+ARG PREDICT_MODEL_TYPE=knn
+ENV PREDICT_MODEL_TYPE=${PREDICT_MODEL_TYPE} \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 EXPOSE 8000
 CMD ["uvicorn", "predict_service.predict:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]

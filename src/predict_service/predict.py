@@ -1,5 +1,4 @@
 import os
-import pickle
 from pathlib import Path
 
 import numpy as np
@@ -8,31 +7,20 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 import config
+from predict_service.model_loader import load_registered_model
 from user_authentication_service.auth import require_predict_access
 
-# Paths can be overridden via environment variables (e.g. inside a Docker
-# container). The defaults from config.py point to the project directory.
-MODEL_PATH = Path(os.getenv('MODEL_PATH', config.MODEL_PATH))
-USER_MATRIX_PATH = Path(os.getenv('USER_MATRIX_PATH', config.USER_MATRIX_PATH))
-MOVIE_MATRIX_PATH = Path(os.getenv('MOVIE_MATRIX_PATH', config.MOVIE_MATRIX_PATH))
-from config import N_RECOMMENDATIONS
-
-
-# Loading the trained model and the matrices once at startup
-try:
-    with open(MODEL_PATH, 'rb') as f:
-        model = pickle.load(f)
-
-    # Genre profile of each user, indexed by userId
-    user_matrix = pd.read_csv(USER_MATRIX_PATH, index_col='userId')
-
-    # kneighbors() returns row positions in the movie matrix the model was
-    # trained on. This array maps those positions back to movieIds.
-    movie_ids = pd.read_csv(MOVIE_MATRIX_PATH, usecols=['movieId'])[
-        'movieId'
-    ].to_numpy()
-except FileNotFoundError as e:
-    raise RuntimeError(f'Required file not found: {e.filename}') from e
+recommender = load_registered_model()
+user_matrix = pd.read_csv(
+    Path(os.getenv('USER_MATRIX_PATH', config.USER_MATRIX_PATH)), index_col='userId'
+)
+if user_matrix.index.has_duplicates or user_matrix.index.isna().any():
+    raise ValueError('User matrix has missing or duplicate IDs')
+missing_genres = set(recommender.genres) - set(user_matrix.columns)
+if missing_genres:
+    raise ValueError(f'User matrix lacks model genres: {sorted(missing_genres)}')
+if len(recommender.movie_ids) < config.N_RECOMMENDATIONS:
+    raise ValueError('Model catalog is too small for the requested recommendations')
 
 app = FastAPI(
     title='Movie Recommendation API',
@@ -70,7 +58,12 @@ def predict(request: PredictRequest):
         raise HTTPException(status_code=404, detail=f'Unknown user ids: {unknown_ids}')
 
     users = user_matrix.loc[request.user_ids]
-    _, indices = model.kneighbors(users)
+    try:
+        indices = recommender.candidates(
+            users, min(config.KNN_NEIGHBORS, len(recommender.movie_ids))
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     recommendations = []
     for user_id, row in zip(request.user_ids, indices):
@@ -81,9 +74,15 @@ def predict(request: PredictRequest):
         rng = np.random.default_rng(
             None if request.seed is None else [request.seed, user_id]
         )
-        selection = rng.choice(row, size=N_RECOMMENDATIONS, replace=False)
+        selection = rng.choice(row, size=config.N_RECOMMENDATIONS, replace=False)
         recommendations.append(
-            {'user_id': user_id, 'movie_ids': movie_ids[selection].tolist()}
+            {'user_id': user_id, 'movie_ids': recommender.movie_ids[selection].tolist()}
         )
 
     return {'recommendations': recommendations}
+
+
+@app.get('/model', dependencies=[Depends(require_predict_access)])
+def model_info():
+    """Report the immutable registry selection loaded by this replica."""
+    return {'model_uri': recommender.uri, 'model_type': recommender.model_type}
