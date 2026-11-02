@@ -1,5 +1,5 @@
 .PHONY: run-dcs test-dcs-part test-dcs-no-body test-dcs-invalid \
-	run-api run-api-container test-api start-project stop-project
+	run-api run-api-container test-api start-project stop-project train
 
 # Targets that need the secrets (e.g. DAGSHUB_TOKEN) depend on this file.
 # Only runs if .env does not exist yet, and then stops with a hint.
@@ -48,3 +48,7 @@ start-project:
 
 stop-project:
 	docker compose down
+
+# Train the MODEL_TYPE selected in .env (default: knn), rebuilding as needed.
+train: .env
+	docker compose run --rm --build train
