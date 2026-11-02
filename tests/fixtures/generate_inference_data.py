@@ -26,8 +26,8 @@ GENRES = [
     "Western",
 ]
 
-# Must match the current model's fitted movie-row count.
-MODEL_MOVIE_COUNT = 27_278
+# Small catalog used to train a disposable CI model.
+MODEL_MOVIE_COUNT = 40
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "data" / "processed"
@@ -48,9 +48,10 @@ def main():
 
     with MOVIE_FILE.open("x", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(["movieId"])
+        writer.writerow(["movieId", *GENRES])
         writer.writerows(
-            [movie_id] for movie_id in range(1, MODEL_MOVIE_COUNT + 1)
+            [movie_id, *[int((movie_id + i) % 3 == 0) for i in range(len(GENRES))]]
+            for movie_id in range(1, MODEL_MOVIE_COUNT + 1)
         )
 
     print("Generated synthetic inference data for CI test user 1.")

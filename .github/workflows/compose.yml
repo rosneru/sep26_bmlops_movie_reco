@@ -17,6 +17,9 @@ jobs:
     timeout-minutes: 15
 
     env:
+      PREDICT_MODEL_TYPE: knn
+      PREDICT_MODEL_NAME: movie-genre-knn
+      PREDICT_MODEL_VERSION: latest
       GRAFANA_ADMIN_USER: ci-admin
       GRAFANA_ADMIN_PASSWORD: disposable-ci-password
       # The data collection service only needs real values for /ingest,
@@ -41,8 +44,19 @@ jobs:
             python:3.10-slim \
             python tests/fixtures/generate_inference_data.py
 
+      - name: Register disposable KNN model
+        run: |
+          docker compose build train
+          docker compose run --rm train
+
       - name: Build and start all services
         run: docker compose up -d --build --wait --wait-timeout 120
+
+      - name: Test versioned registry loading
+        run: |
+          docker compose run --rm --no-deps --entrypoint python \
+            -v "$PWD/tests:/app/tests:ro" predict \
+            -m unittest discover -s /app/tests/prediction -v
 
       - name: Test prediction through Nginx
         run: |
