@@ -1,0 +1,36 @@
+# Disposable local registry for CI/offline tests; never points at DagsHub.
+# Use together with docker-compose.yml and a separate project name.
+services:
+  mlflow:
+    build:
+      context: .
+      dockerfile: src/mlflow_service/Dockerfile
+    volumes:
+      - mlflow_test_data:/mlflow
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  train:
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_TRACKING_USERNAME: ""
+      MLFLOW_TRACKING_PASSWORD: ""
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+  predict:
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_TRACKING_USERNAME: ""
+      MLFLOW_TRACKING_PASSWORD: ""
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+volumes:
+  mlflow_test_data:

@@ -1,9 +1,11 @@
 # Prediction from the MLflow registry
 
-Prediction resolves the newest registered version at startup, then downloads that
+Prediction connects to the shared DagsHub MLflow server and resolves the newest
+registered version at startup, then downloads that
 numeric version and its matching catalog. It does not train or fall back to model.pkl.
 Latest means newest registered, not best evaluated. An empty registry requires an
-initial training run before prediction can start.
+initial training run before prediction can start. Set MLFLOW_TRACKING_USERNAME
+and DAGSHUB_TOKEN in the root .env; Compose forwards them to the MLflow client.
 The existing authenticated POST /predict request and response format is preserved.
 GET /model (same authentication) reports the loaded model URI and type.
 
@@ -76,8 +78,8 @@ two-tower image. Root uv.lock is not the prediction image dependency source.
 
 ## Validation
 
-The Compose CI trains/registers a small synthetic KNN model in its disposable
-MLflow server before starting the API, then requests predictions through Nginx.
+The Compose CI uses docker-compose.test.yml to train/register a small synthetic
+KNN model in its disposable local MLflow server before starting the API, then requests predictions through Nginx.
 Local integration tests use temporary SQLite registries and artifacts:
 
 ```bash

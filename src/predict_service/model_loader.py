@@ -17,7 +17,12 @@ def load_registered_model():
         'PREDICT_MODEL_NAME', f'movie-genre-{model_type.replace("_", "-")}'
     )
     version = os.getenv('PREDICT_MODEL_VERSION', '').strip()
-    mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'http://localhost:5000'))
+    mlflow.set_tracking_uri(
+        os.getenv(
+            'MLFLOW_TRACKING_URI',
+            'https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow',
+        )
+    )
     mlflow.set_registry_uri(mlflow.get_tracking_uri())
     if not version or version.lower() == 'latest':
         # Resolve once to a numeric version so the model and schema come from

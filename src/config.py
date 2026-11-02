@@ -44,7 +44,7 @@ TEST_SEED_OFFSET = 2000
 # MLflow
 MLFLOW_TRACKING_URI = os.getenv(
     'MLFLOW_TRACKING_URI',
-    'http://localhost:5000',
+    'https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow',
 )
 
 MODEL_NAMES = {

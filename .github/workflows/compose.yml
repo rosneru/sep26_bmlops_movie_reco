@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 15
 
     env:
+      COMPOSE_FILE: docker-compose.yml:docker-compose.test.yml
+      COMPOSE_PROJECT_NAME: movie-reco-ci
       PREDICT_MODEL_TYPE: knn
       PREDICT_MODEL_NAME: movie-genre-knn
       PREDICT_MODEL_VERSION: latest
