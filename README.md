@@ -1,5 +1,9 @@
 # About
 
+Prediction now loads the latest registered MLflow model at startup. Follow the
+[prediction setup](src/predict_service/README.md) before older API examples below.
+
+
 Movie recommendation project, done with four members from September 2026 in a Liora MLOps training.
 
 The project is based on Lioras [Template_MLOps_movie_recommandation](https://github.com/DataScientest-Studio/Template_MLOps_movie_recommandation) repository as a starting point.
@@ -189,3 +193,19 @@ Or, call the `Makefile` with
 ```bash
 make stop-project
 ```
+
+## Prediction registry selection
+
+Prediction now loads the latest registered MLflow model at startup; it no longer reads the
+local model.pkl. Before following older API startup examples above, configure
+PREDICT_MODEL_TYPE and PREDICT_MODEL_NAME and register a
+model. See [prediction setup and rollback](src/predict_service/README.md).
+
+## Trained model storage
+
+MLflow stores trained model artifacts and its registry database in the persistent
+Docker volume `movie-reco_mlflow_data`, mounted at `/mlflow` in its container.
+The model files are under `/mlflow/artifacts`; registry/tracking records are in
+`/mlflow/mlflow.db`. These survive container recreation, but `docker compose down -v`
+deletes the volume. This is local storage, not a backup or shared team storage.
+See [storage locations, code references, and inspection commands](src/train_service/readme.md#where-trained-models-live).
