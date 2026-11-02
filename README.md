@@ -201,11 +201,43 @@ local model.pkl. Before following older API startup examples above, configure
 PREDICT_MODEL_TYPE and PREDICT_MODEL_NAME and register a
 model. See [prediction setup and rollback](src/predict_service/README.md).
 
-## Trained model storage
+## MLflow on DagsHub
 
-MLflow stores trained model artifacts and its registry database in the persistent
-Docker volume `movie-reco_mlflow_data`, mounted at `/mlflow` in its container.
-The model files are under `/mlflow/artifacts`; registry/tracking records are in
-`/mlflow/mlflow.db`. These survive container recreation, but `docker compose down -v`
-deletes the volume. This is local storage, not a backup or shared team storage.
-See [storage locations, code references, and inspection commands](src/train_service/readme.md#where-trained-models-live).
+Training and prediction use the shared [DagsHub MLflow dashboard](https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow).
+Models, artifacts, runs, and registry versions live there; a local MLflow server
+is not needed for normal use.
+
+Set your DagsHub username and existing token in the root `.env`:
+
+```dotenv
+MLFLOW_TRACKING_USERNAME=your-dagshub-username
+DAGSHUB_TOKEN=your-token
+```
+
+The repository MLflow URL is the default. Optionally set `MLFLOW_TRACKING_URI`
+to another server. Compose passes these settings explicitly to train/predict;
+MLflow uses `DAGSHUB_TOKEN` as `MLFLOW_TRACKING_PASSWORD`.
+
+```bash
+docker compose build train predict
+docker compose run --rm train
+docker compose up -d predict nginx
+```
+
+Training creates remote models; earlier local models are not migrated. Repository
+contributor access and internet connectivity are needed. Check storage/account
+limits on DagsHub; no paid plan is required by this configuration.
+
+### Local test registry
+
+CI uses a disposable local server, dummy credentials, and synthetic models so
+it never uploads test artifacts to the team's DagsHub repository. For local
+integration testing with that server, use a separate Compose project:
+
+```bash
+docker compose -p movie-reco-test -f docker-compose.yml -f docker-compose.test.yml config --quiet
+```
+
+Use the same `-p` and `-f` arguments on subsequent test commands. Normal commands
+without the override use DagsHub. The separate test server is defined only in
+`docker-compose.test.yml`.

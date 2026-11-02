@@ -34,23 +34,6 @@ services:
       DAGSHUB_BUCKET: ${DAGSHUB_BUCKET:?Set DAGSHUB_BUCKET in the root .env file or your shell}
       DAGSHUB_TOKEN: ${DAGSHUB_TOKEN:?Set DAGSHUB_TOKEN in the root .env file or your shell}
 
-  mlflow:
-    build:
-      context: .
-      dockerfile: src/mlflow_service/Dockerfile
-    restart: unless-stopped
-    ports:
-      - "5000:5000"
-    volumes:
-      - mlflow_data:/mlflow
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3)"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 60s
-
-
   # One-off job, invoked explicitly; normal compose up does not train a model.
   train:
     image: movie-reco-train:${MODEL_TYPE:-knn}
@@ -62,12 +45,11 @@ services:
         MODEL_TYPE: ${MODEL_TYPE:-knn}
     environment:
       MODEL_TYPE: ${MODEL_TYPE:-knn}
-      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow}
+      MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-}
+      MLFLOW_TRACKING_PASSWORD: ${DAGSHUB_TOKEN:-}
     volumes:
       - ./data/processed:/app/data/processed:ro
-    depends_on:
-      mlflow:
-        condition: service_healthy
 
   predict:
     image: movie-reco-predict:${PREDICT_MODEL_TYPE:-knn}
@@ -77,15 +59,14 @@ services:
       args:
         PREDICT_MODEL_TYPE: ${PREDICT_MODEL_TYPE:-knn}
     environment:
-      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow}
+      MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-}
+      MLFLOW_TRACKING_PASSWORD: ${DAGSHUB_TOKEN:-}
       PREDICT_MODEL_TYPE: ${PREDICT_MODEL_TYPE:-knn}
       PREDICT_MODEL_NAME: ${PREDICT_MODEL_NAME:-movie-genre-knn}
       PREDICT_MODEL_VERSION: ${PREDICT_MODEL_VERSION:-latest}
     volumes:
       - ./data/processed:/app/data/processed:ro
-    depends_on:
-      mlflow:
-        condition: service_healthy
     expose:
       - "8000"
     deploy:
@@ -128,4 +109,3 @@ services:
 volumes:
   prometheus_data:
   grafana_data:
-  mlflow_data:

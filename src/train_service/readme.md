@@ -74,8 +74,8 @@ Settings are centralized in `src/config.py`, including split ratios, seed, model
 Run the commands below from the repository root in **WSL Bash**, with Docker
 Desktop running and WSL integration enabled. Training runs inside Docker; no
 local Python environment, PyTorch or MLflow installation is required.
-Configure the root `.env` from `.env.example`, including the Grafana credentials
-required when Compose reads the configuration.
+Configure the root `.env` from `.env.example`, including your DagsHub username,
+token, and the Grafana credentials required when Compose reads the configuration.
 
 Shared dependencies are declared in `src/train_service/requirements.txt`;
 `requirements-two-tower.txt` adds CPU PyTorch.
@@ -88,7 +88,7 @@ Build the images:
 
 ```bash
 export MODEL_TYPE=two_tower
-docker compose build train mlflow
+docker compose build train
 ```
 
 Rebuild after changing training source code or requirements. Ordinary
@@ -121,15 +121,14 @@ mount is read-only, and existing prepared CSVs are not used or overwritten.
 docker compose run --rm train
 ```
 
-Compose starts MLflow if needed and waits for its health check. The job connects
-to `http://mlflow:5000`, prepares data, trains, records parameters and metrics,
+The job connects to the DagsHub-hosted MLflow server, prepares data, trains, records parameters and metrics,
 uploads preparation metadata and the model, and registers a model version.
 Each invocation that completes training and registration creates a new model version.
 There is currently no quality threshold for registration, and registration does not deploy the model. The temporary
 model packaging directory is cleaned up, and `--rm` removes the job container.
-MLflow records and artifacts persist in the `mlflow_data` volume.
+MLflow records and model artifacts are stored on DagsHub.
 
-Open [MLflow](http://localhost:5000). Copy the run ID and the version number from
+Open [DagsHub MLflow](https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow). Copy the run ID and the version number from
 the printed registry URI for validation:
 
 ```bash
@@ -167,141 +166,32 @@ docker compose run --rm --no-deps \
   --stage registry --run-id "$training_run_id" --version "$model_version"
 ```
 
-MLflow must already be healthy when using `--no-deps`. Successful stages print
+The DagsHub server must be reachable and your credentials must grant repository access. Successful stages print
 `PASS`. Tracking checks parameters and metric history; artifact checks download
 the model and preparation metadata; registry checks compare predictions from
 the run model and registered model. Synthetic probe predictions check loading
 consistency, not recommendation quality.
 
-### Persistence after restart
+## MLflow storage and dashboard
 
-Preserve the validator's snapshot in a dedicated named volume across disposable
-containers:
+Normal training and prediction use [DagsHub MLflow](https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow).
+Runs, parameters, metrics, model artifacts, and registered versions are stored
+there, rather than in a local Docker volume. No local MLflow service is started.
 
-```bash
-docker volume create movie-reco-validation
+In the root `.env`, set your DagsHub username and token:
 
-docker compose run --rm --no-deps \
-  -e PYTHONPATH=/app \
-  -v "$PWD/tests:/app/tests:ro" \
-  -v movie-reco-validation:/app/models \
-  train /app/tests/mlflow/validate_train_mlflow.py \
-  --stage before-restart --run-id "$training_run_id"
-
-docker compose restart mlflow
-docker compose ps mlflow
+```dotenv
+MLFLOW_TRACKING_USERNAME=your-dagshub-username
+DAGSHUB_TOKEN=your-token
 ```
 
-Wait until MLflow shows healthy, then compare:
+Compose passes the token as `MLFLOW_TRACKING_PASSWORD` only to clients that need
+it. The repository's hosted MLflow URL is the default; `MLFLOW_TRACKING_URI` can
+override it. Do not commit `.env` or paste tokens into logs/chat.
 
-```bash
-docker compose run --rm --no-deps \
-  -e PYTHONPATH=/app \
-  -v "$PWD/tests:/app/tests:ro" \
-  -v movie-reco-validation:/app/models \
-  train /app/tests/mlflow/validate_train_mlflow.py \
-  --stage after-restart --run-id "$training_run_id"
-```
-
-The snapshot is validation evidence, not a duplicate training model export.
-`before-restart` refuses to overwrite an existing snapshot for the same run.
-
-## Storage and browser UI
-
-Open [MLflow](http://localhost:5000).
-
-- **Experiments -> run:** Parameters, Metrics, run Tags, and Artifacts.
-- **Artifacts -> data:** preparation settings, source filenames and row counts (not the input CSVs).
-- **Artifacts -> model:** the loadable MLflow model, including weights, code and metadata.
-- **Model registry -> movie-genre-two-tower -> version -> Tags:** visible model metadata.
-
-### Where trained models live
-
-Models are stored in a **Docker named volume**, not in the repository and not in
-an individual container's writable filesystem.
-
-| Location inside the MLflow container | Contents |
-| --- | --- |
-| `/mlflow/artifacts` | Run artifacts: exported models/weights, dependencies, metadata, and serving catalogs |
-| `/mlflow/mlflow.db` | SQLite database: experiments, runs, parameters, metrics, and model registry versions/tags |
-
-The registry records which version points to which artifact; it does not keep a
-second copy of the model weights. Each run's artifact directory is managed by
-MLflow, so use the UI to find a particular model rather than guessing its subpath.
-The repository's `models/model.pkl` is an older local artifact and is not the
-output of this training workflow.
-
-### How the code connects these locations
-
-1. `src/train_service/train_model.py`: `mlflow.log_artifacts(...)` uploads the
-   temporary export, and `mlflow.register_model(...)` registers its run URI.
-   The temporary training export directory is deleted after use.
-2. `src/mlflow_service/Dockerfile`: `--backend-store-uri sqlite:////mlflow/mlflow.db`
-   selects the database; `--artifacts-destination /mlflow/artifacts` selects artifact
-   storage. `--serve-artifacts` lets clients upload/download through the server.
-3. Root `docker-compose.yml`: `mlflow_data:/mlflow` mounts the named volume over
-   `/mlflow`, preserving both the database and artifacts independently of the
-   container. The top-level `volumes: mlflow_data:` declares that volume.
-
-### Persistence and deletion
-
-| Action | Stored models and registry |
-| --- | --- |
-| Stop/restart services | Preserved |
-| Rebuild images | Preserved |
-| Remove/recreate the MLflow container using the same volume | Preserved |
-| `docker compose down` | Preserved |
-| `docker compose down -v` or delete the MLflow volume | Deleted |
-
-The volume normally has the project-prefixed name `movie-reco_mlflow_data`.
-Changing the Compose project name can attach a different empty volume; the old
-volume may still exist. Storage is local to this Docker installation and is not
-shared with teammates or another machine. A Docker Desktop reset, disk failure,
-or volume deletion can lose it. **Persistent storage is not a backup**; a
-recoverable backup needs both the database and artifacts from a consistent state.
-
-### Find and inspect storage
-
-Run from the repository root in WSL Bash:
-
-```bash
-# List artifact directories inside the server container.
-docker compose exec mlflow ls -lah /mlflow/artifacts
-
-# Show the volume currently mounted on the actual MLflow container.
-docker inspect "$(docker compose ps -q mlflow)" --format '{{json .Mounts}}'
-
-# Inspect the normal project-prefixed volume.
-docker volume inspect movie-reco_mlflow_data
-```
-
-The reported volume mountpoint is inside Docker Desktop's Linux environment; it
-is not a folder under this repository. Prefer MLflow's UI or artifact download
-APIs for accessing individual models rather than modifying volume files directly.
-
-
-Inspect the container without assuming Bash is installed:
-
-```bash
-docker compose exec mlflow sh
-```
-
-Inside the container:
-
-```sh
-cd /mlflow
-ls -lah
-ls -lah artifacts
-exit
-```
-
-Stop services while preserving data:
-
-```bash
-docker compose stop
-```
-
-Do not use `docker compose down -v` when data must be retained: it deletes Compose-managed volumes. Prediction loads the newest registered version at startup by default; restart it after training to load a new version. See [prediction setup](../predict_service/README.md).
+Train once to create a model in the remote registry, then start prediction.
+Earlier local runs are not transferred. Ordinary tests remain local and use
+`docker-compose.test.yml`; see the root README for the test command.
 
 ## Files and responsibilities
 
