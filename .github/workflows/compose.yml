@@ -78,7 +78,7 @@ jobs:
             data_collection.cache-to=type=gha,scope=compose-data-collection,mode=max
 
       - name: Register disposable KNN model
-        run: docker compose run --rm --no-build train
+        run: docker compose run --rm train
 
       - name: Start all services using built images
         run: docker compose up -d --no-build --wait --wait-timeout 120
