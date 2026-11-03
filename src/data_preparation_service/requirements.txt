@@ -1,0 +1,4 @@
+numpy==1.26.4
+pandas==2.3.3
+click==8.5.0
+PyYAML==6.0.3

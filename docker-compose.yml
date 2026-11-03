@@ -56,6 +56,20 @@ services:
       DAGSHUB_BUCKET: ${DAGSHUB_BUCKET:?Set DAGSHUB_BUCKET in the root .env file or your shell}
       DAGSHUB_TOKEN: ${DAGSHUB_TOKEN:?Set DAGSHUB_TOKEN in the root .env file or your shell}
 
+  # One-off feature preparation; run explicitly before training.
+  data_preparation:
+    image: movie-reco-data-preparation:local
+    profiles: [preparation]
+    build:
+      context: .
+      dockerfile: src/data_preparation_service/Dockerfile
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+      - ./data/interim/ratings_parts:/app/data/interim/ratings_parts:ro
+      - ./params.yaml:/app/params.yaml:ro
+      - ./data/processed:/app/data/processed
+    restart: "no"
+
   # One-off job, invoked explicitly; normal compose up does not train a model.
   train:
     image: movie-reco-train:${MODEL_TYPE:-knn}
