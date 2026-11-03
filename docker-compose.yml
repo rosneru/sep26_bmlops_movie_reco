@@ -12,10 +12,22 @@ x-api-healthcheck: &api-healthcheck
 
 x-airflow-common: &airflow-common
   image: apache/airflow:3.3.2
-  environment:
+  environment: &airflow-environment
     # The generated password uses URL-safe hexadecimal characters.
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_POSTGRES_USER:-airflow}:${AIRFLOW_POSTGRES_PASSWORD:?Set AIRFLOW_POSTGRES_PASSWORD in .env}@airflow-postgres:5432/${AIRFLOW_POSTGRES_DB:-airflow}
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__PARALLELISM: "4"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?Run python airflow/setup_local.py}
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Run python airflow/setup_local.py}
+    # FAB stores dashboard accounts as password hashes in PostgreSQL.
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__API__BASE_URL: http://localhost:8081
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags:ro
+    - airflow_logs:/opt/airflow/logs
   depends_on:
     airflow-postgres:
       condition: service_healthy
@@ -140,9 +152,58 @@ services:
     command: ["db", "migrate"]
     restart: "no"
 
+  # Database initialization remains manual for this step.
+  # Later: gate these services on successful completion of airflow-init.
+  airflow-api-server:
+    <<: *airflow-common
+    environment:
+      <<: *airflow-environment
+      # Official image entrypoint creates this account if it does not exist.
+      # Database migration remains a separate, manual step.
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?Run python airflow/setup_local.py}
+      _AIRFLOW_WWW_USER_FIRSTNAME: Airflow
+      _AIRFLOW_WWW_USER_LASTNAME: Admin
+      _AIRFLOW_WWW_USER_EMAIL: airflow@localhost.local
+      _AIRFLOW_WWW_USER_ROLE: Admin
+    command: ["api-server"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v2/monitor/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: ["scheduler"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$$HOSTNAME\""]
+      interval: 20s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: ["dag-processor"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type DagProcessorJob --hostname \"$$HOSTNAME\""]
+      interval: 20s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+
 volumes:
   prometheus_data:
   grafana_data:
+  airflow_logs:
 
   # Reuse the database volume created during the initial Airflow setup.
   # External ownership prevents Compose down -v from removing this database.
