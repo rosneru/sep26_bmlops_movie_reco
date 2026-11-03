@@ -3,7 +3,7 @@
 All services live in the main `docker-compose.yml`, using Airflow 3.3.2 and
 PostgreSQL 16. The API server provides the dashboard, the scheduler coordinates
 work with LocalExecutor, and the DAG processor parses files in `airflow/dags`.
-There is no Redis or separate Celery worker. No project DAGs have been added yet.
+There is no Redis or separate Celery worker. A manual infrastructure smoke-test DAG is included; movie pipeline DAGs are not connected yet.
 
 ## Local settings
 
@@ -74,8 +74,7 @@ docker compose up -d --wait airflow-api-server airflow-scheduler airflow-dag-pro
 docker compose ps airflow-postgres airflow-api-server airflow-scheduler airflow-dag-processor
 ```
 
-Open http://localhost:8081 and log in with the credentials described above. An
-empty DAG list is expected. The API server health endpoint is
+Open http://localhost:8081 and log in with the credentials described above. The manual `infrastructure_smoke_test` DAG should appear after the processor discovers its file. The API server health endpoint is
 http://localhost:8081/api/v2/monitor/health; inspect its component statuses as
 well as the HTTP response. Scheduler and DAG processor healthchecks validate
 heartbeats in the metadata database. Task/service logs persist in the named
@@ -89,7 +88,7 @@ docker compose stop airflow-api-server airflow-scheduler airflow-dag-processor a
 
 Database initialization is intentionally still manual: `airflow-init` has its
 own profile. Normal Compose up does not run it. Automatic startup gating on
-successful initialization is a planned later step, as are a smoke-test DAG and
+successful initialization is a planned later step, as is
 integration with data preparation, KNN training and prediction. No training,
 prediction deployment, or DagsHub writes are triggered by this setup.
 
@@ -98,3 +97,24 @@ References:
 - https://airflow.apache.org/docs/apache-airflow/3.3.2/core-concepts/auth-manager/simple/index.html
 
 - https://airflow.apache.org/docs/apache-airflow-providers-fab/stable/auth-manager/webserver-authentication.html
+
+## Manual infrastructure smoke test
+
+DAG: `airflow/dags/infrastructure_smoke_test.py`.
+The DAG is manual-only and runs `start -> log_message -> end`. It does not read
+movie data, train a model, or contact DagsHub.
+
+1. Open http://localhost:8081 and log in using your `.env` credentials.
+2. Find `infrastructure_smoke_test` and unpause it.
+3. Click Trigger DAG and wait for all three tasks to reach `success`.
+4. Open the `log_message` task log and find `AIRFLOW_SMOKE_TEST_OK`.
+5. Re-pause the DAG after testing if desired. It has no automatic schedule.
+
+If the new DAG does not appear yet, restart only the DAG processor to force
+immediate discovery:
+
+```powershell
+docker compose restart airflow-dag-processor
+```
+
+There is no separate pytest file for this check; use the DAG directly in the UI.
