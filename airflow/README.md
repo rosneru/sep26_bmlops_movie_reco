@@ -89,8 +89,8 @@ docker compose stop airflow-api-server airflow-scheduler airflow-dag-processor a
 Database initialization is intentionally still manual: `airflow-init` has its
 own profile. Normal Compose up does not run it. Automatic startup gating on
 successful initialization is a planned later step, as is
-integration with KNN training and prediction. No training,
-prediction deployment, or DagsHub writes are triggered by this setup.
+prediction deployment. Starting the infrastructure does not run training;
+manually triggering the training_pipeline DAG now trains/registers a KNN version.
 
 References:
 - https://airflow.apache.org/docs/apache-airflow/3.3.2/howto/docker-compose/index.html
@@ -119,13 +119,18 @@ docker compose restart airflow-dag-processor
 
 There is no separate pytest file for this check; use the DAG directly in the UI.
 
-## Run data preparation from Airflow
+## Run preparation and KNN training from Airflow
 
-DAG: `airflow/dags/data_preparation.py`, shown as `data_preparation` in the UI.
-It has one task, `prepare_features`, using DockerOperator. It creates a sibling
-container from the same `movie-reco-data-preparation:local` image used by Compose;
-it does not invoke Docker Compose itself. It reads `split.current_part` from the
+DAG: `airflow/dags/training_pipeline.py`, shown as `training_pipeline` in the UI.
+It has two sequential tasks: `prepare_features -> train_knn`. The first uses
+DockerOperator with `movie-reco-data-preparation:local`. The second uses a small
+DockerOperator subclass with `movie-reco-train:knn`; it resolves MLflow credentials
+only at task execution. Both create sibling containers through Docker Engine,
+not Docker Compose commands. Preparation reads `split.current_part` from the
 mounted `params.yaml`. No trigger parameter is required or used in this version.
+The DAG ID is `training_pipeline`, reflecting both preparation and training.
+Historical runs under the old `data_preparation` ID remain in Airflow history;
+that old DAG is no longer defined in the source. Use only `training_pipeline` for new runs.
 
 The pinned official `apache/airflow:3.3.2` image already includes Docker provider
 4.5.9, verified in the installed image, so no custom Airflow Dockerfile or package
@@ -139,6 +144,9 @@ control over the host Docker Engine; the API and DAG processor do not get it.
 python airflow/setup_local.py
 docker compose config --quiet
 docker compose build data_preparation
+$env:MODEL_TYPE = "knn"
+docker compose build train
+Remove-Item Env:MODEL_TYPE -ErrorAction SilentlyContinue
 docker compose up -d --wait airflow-api-server airflow-scheduler airflow-dag-processor
 ```
 
@@ -163,10 +171,13 @@ Airflow user with this supplementary group, not as root.
 
 1. Ensure `movies.csv` and all rating parts through `split.current_part` exist.
 2. Open http://localhost:8081 and log in with the `.env` dashboard account.
-3. Find `data_preparation`, unpause it, then click Trigger DAG.
+3. Find `training_pipeline`, unpause it, then click Trigger DAG.
 4. Wait for `prepare_features` to reach `success`.
 5. In its log, find `Data preparation passed: ratings=..., users=..., movies=..., genres=...`.
-6. Verify the host output files:
+6. Wait for `train_knn` to reach `success`; it runs only after preparation succeeds.
+7. In the training log, find `MLflow run ID:` and `Registry URI: models:/movie-genre-knn/<version>`.
+8. Open DagsHub MLflow and confirm that run and the registered model version exist.
+9. Verify the host output files:
 
 ```powershell
 Get-Item data/processed/user_matrix.csv, data/processed/movie_matrix.csv |
@@ -175,9 +186,11 @@ Get-Item data/processed/user_matrix.csv, data/processed/movie_matrix.csv |
 
 The DAG has no automatic schedule, allows only one active run, and has no task
 retries. Do not also run manual Compose/DVC preparation concurrently: all paths
-write the same output files. No model training or DagsHub request is performed.
-The child container has networking disabled and is removed after success or
-failure; its stdout/stderr remains in the Airflow task log. `mount_tmp_dir=False`
+write the same output files. Preparation has networking disabled. Training has
+outbound bridge networking for DagsHub and a read-only processed-data mount.
+Each child container is removed after success or failure; stdout/stderr remains
+in the Airflow task log. A successful trigger registers a new KNN model version.
+It does not restart or change the prediction service. `mount_tmp_dir=False`
 avoids trying to mount a temporary directory that exists only in the scheduler.
 
 If the DAG is not discovered, restart `airflow-dag-processor`. If an image is
@@ -189,3 +202,32 @@ code, Dockerfile or requirements; the DockerOperator does not build it for you.
 Initialization is still manual (`docker compose run --rm airflow-init` on a fresh
 database). Automatic startup dependency on its successful completion remains a
 later step.
+
+### MLflow credentials and training failure checks
+
+Set `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_USERNAME`, and `DAGSHUB_TOKEN` in the
+root `.env`. The last becomes `MLFLOW_TRACKING_PASSWORD` only in the scheduler
+execution service and then in the training container. After changing `.env`,
+recreate the scheduler to update its environment:
+
+```powershell
+docker compose up -d --wait airflow-scheduler
+```
+
+The DAG processor and API server do not receive these MLflow credentials.
+`MLflowTrainingOperator.execute()` validates them at runtime, registers the token
+with Airflow's log masker, and passes them using DockerOperator's private
+environment. Credentials are not embedded in the serialized DAG or rendered
+task environment. Docker administrators can still inspect container environment
+variables, so this mechanism does not hide secrets from Docker administrators.
+
+KNN is explicitly selected in this DAG regardless of the `.env` MODEL_TYPE used
+for standalone training. Always build `movie-reco-train:knn` before triggering.
+The default `all_success` dependency prevents training after preparation failure.
+Missing credentials fail before creating the training container. HTTP 403 from
+MLflow means remote creation/registration is forbidden; check token validity and
+Write access to the configured DagsHub project. Training cannot complete until
+that access is fixed. No automatic retry is configured because a partial run may
+already have registered a model version. Re-triggering the DAG prepares data again
+and can register another version; it does not reuse a previously completed model.
+The training task timeout is 30 minutes; the DAG timeout is 45 minutes.

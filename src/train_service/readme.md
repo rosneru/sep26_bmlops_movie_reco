@@ -15,8 +15,9 @@ Training receives MODEL_TYPE and MLFLOW_TRACKING_URI. The same MODEL_TYPE select
 the image tag and build dependencies. It selects a training candidate, not the
 model served by prediction. Prediction still uses the existing KNN artifact;
 future integration should select its registered model and version independently.
-Airflow can later coordinate training, validation, and promotion without making
-every service share the same model selection or credentials.
+The Airflow `training_pipeline` DAG now runs feature preparation followed by KNN
+training and MLflow registration. See `airflow/README.md` for PowerShell setup
+and dashboard verification. Prediction deployment remains a separate later step.
 
 The following one-command overrides take precedence over `.env`:
 

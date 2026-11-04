@@ -196,6 +196,13 @@ services:
 
   airflow-scheduler:
     <<: *airflow-common
+    environment:
+      <<: *airflow-environment
+      # Only the execution service needs these credentials. The training
+      # operator passes them privately to its child container at runtime.
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow}
+      MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-}
+      MLFLOW_TRACKING_PASSWORD: ${DAGSHUB_TOKEN:-}
     # LocalExecutor runs DockerOperator here. Group 0 matches the socket on
     # Docker Desktop; override AIRFLOW_DOCKER_GID for a different Linux host.
     group_add:

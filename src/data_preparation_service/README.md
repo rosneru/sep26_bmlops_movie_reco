@@ -38,7 +38,7 @@ The prediction service reads user features at startup, so it does not hot-reload
 these changes. Coordinated deployment is a later orchestration step.
 
 This service is in the `preparation` profile, so normal `docker compose up` does
-not execute it. Airflow can also execute the same image through the manual `data_preparation` DAG; see `airflow/README.md` for setup and UI verification. No DVC lock changes,
+not execute it. Airflow can also execute the same image through the manual `training_pipeline` DAG; see `airflow/README.md` for setup and UI verification. No DVC lock changes,
 data uploads, or MLflow registration are performed by this command; DVC's
 `build_features` stage remains an alternative entry point for the existing flow.
 
