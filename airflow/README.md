@@ -1,5 +1,29 @@
 # Local Airflow infrastructure
 
+## Quick start and current startup behavior
+
+Airflow database initialization is now automatic: Compose waits for PostgreSQL
+to become healthy, runs `airflow-init` (`airflow db migrate`), and starts the API
+server, scheduler and DAG processor only after initialization exits successfully.
+Existing database contents and run history are preserved. No separate init
+command is required for normal startup.
+
+With the root `.env` configured and the external database volume already created,
+run from the repository root in PowerShell:
+
+```powershell
+docker compose up -d --build --wait airflow-api-server airflow-scheduler airflow-dag-processor
+docker compose ps -a airflow-init airflow-postgres airflow-api-server airflow-scheduler airflow-dag-processor
+```
+
+Expected: `airflow-init` shows `Exited (0)` and all four long-running services
+show `healthy`. Open http://localhost:8081 with your `.env` dashboard credentials.
+Starting these services does not trigger training; run `training_pipeline`
+manually from the dashboard. If initialization fails, inspect
+`docker compose logs airflow-init`; new Airflow runtime services remain blocked.
+Use Compose `up` for this dependency ordering; `restart` does not replay it.
+For a new machine without local settings/volume, follow the setup sections below.
+
 All services live in the main `docker-compose.yml`, using a local image based on Airflow 3.3.2 and
 PostgreSQL 16. The API server provides the dashboard, the scheduler coordinates
 work with LocalExecutor, and the DAG processor parses files in `airflow/dags`.
@@ -45,15 +69,15 @@ docker compose exec airflow-api-server bash -c 'airflow users reset-password --u
 This login is independent of PostgreSQL and DagsHub credentials. The dashboard
 is bound to the local machine only: http://localhost:8081.
 
-## First database initialization
+## Automatic database initialization and startup
 
 Run from the repository root:
 
 ```powershell
 docker volume create movie-reco-airflow-postgres-data
 docker compose config --quiet
-docker compose up -d --wait airflow-postgres
-docker compose run --rm --build airflow-init
+docker compose up -d --build --wait airflow-api-server airflow-scheduler airflow-dag-processor
+# Optional read-only database diagnostics:
 docker compose run --rm airflow-init db check
 docker compose run --rm airflow-init db check-migrations --migration-wait-timeout 30
 ```
@@ -86,10 +110,16 @@ Stop just these services:
 docker compose stop airflow-api-server airflow-scheduler airflow-dag-processor airflow-postgres
 ```
 
-Database initialization is intentionally still manual: `airflow-init` has its
-own profile. Normal Compose up does not run it. Automatic startup gating on
-successful initialization is a planned later step, while prediction deployment is handled by the final DAG task. Starting the infrastructure does not run training;
-manually triggering the training_pipeline DAG now trains/registers a KNN version.
+Database initialization is automatic during Compose up. The runtime services
+wait for PostgreSQL to become healthy and for `airflow-init` to finish with exit
+code 0 (`service_completed_successfully`). The init service has no profile and
+only depends on healthy PostgreSQL, avoiding a self-dependency. It runs
+`airflow db migrate`, which creates missing tables or applies pending migrations;
+it does not reset the database. On migration failure, new runtime containers do
+not start. Existing already-running services are not automatically stopped by
+a dependency failure. `restart` or a Docker daemon restart does not replay this
+Compose startup gate; use Compose up for the ordered startup. Starting the
+infrastructure does not trigger the manual training pipeline.
 
 References:
 - https://airflow.apache.org/docs/apache-airflow/3.3.2/howto/docker-compose/index.html
@@ -202,9 +232,9 @@ errors, verify `AIRFLOW_DOCKER_GID` and recreate the scheduler. For mount errors
 verify the daemon-side path. Rebuild the preparation image after changes to its
 code, Dockerfile or requirements; the DockerOperator does not build it for you.
 
-Initialization is still manual (`docker compose run --rm airflow-init` on a fresh
-database). Automatic startup dependency on its successful completion remains a
-later step.
+Fresh database setup also uses the automatic Compose startup gate described
+above. There is no separate mandatory init command. The external PostgreSQL
+volume must still be created once on a new machine.
 
 ### MLflow credentials and training failure checks
 
@@ -339,3 +369,26 @@ before processed CSVs are replaced, so existing outputs remain unchanged.
    deploy a new version normally. Keep the intentional failed run as evidence.
 
 This is a manual fault-injection check; it does not require a pytest file.
+
+
+## Verify automatic startup ordering
+
+Run from the repository root after local `.env` setup and external volume creation:
+
+```powershell
+docker compose up -d --build --wait airflow-api-server airflow-scheduler airflow-dag-processor
+docker compose ps -a airflow-init airflow-postgres airflow-api-server airflow-scheduler airflow-dag-processor
+docker compose logs --tail 30 airflow-init
+```
+
+Expected order: PostgreSQL `healthy` -> init `Exited (0)` -> the three Airflow
+runtime services `healthy`. Init exiting is normal: it is a one-off migration
+job, not a long-running API. Its logs should include `Database migration done!`.
+A separate `docker compose run --rm airflow-init` is only needed for explicit
+maintenance, not ordinary startup. No volume removal is required.
+
+For an existing initialized database, running migrations again keeps the tables
+and run history. To inspect startup order from a stopped state, first ensure no
+DAG run is queued/running, then stop only the three Airflow runtime services and
+run the startup command above. Do not use `down -v`. Training/prediction services
+are not started or redeployed by this targeted command.

@@ -36,6 +36,8 @@ x-airflow-common: &airflow-common
   depends_on:
     airflow-postgres:
       condition: service_healthy
+    airflow-init:
+      condition: service_completed_successfully
 
 services:
   data_collection:
@@ -167,18 +169,20 @@ services:
   # One-off initialization; exit code 0 means migrations completed successfully.
   airflow-init:
     <<: *airflow-common
-    profiles: [airflow-init]
+    # Override common dependencies to avoid depending on ourselves.
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
     command: ["db", "migrate"]
     restart: "no"
 
-  # Database initialization remains manual for this step.
-  # Later: gate these services on successful completion of airflow-init.
+  # These services start only after airflow-init completes successfully.
   airflow-api-server:
     <<: *airflow-common
     environment:
       <<: *airflow-environment
       # Official image entrypoint creates this account if it does not exist.
-      # Database migration remains a separate, manual step.
+      # Database migration has already completed in airflow-init.
       _AIRFLOW_WWW_USER_CREATE: "true"
       _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-airflow}
       _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?Run python airflow/setup_local.py}
