@@ -1,14 +1,17 @@
 """Manually prepare features, then train/register KNN through Docker containers."""
 
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 
 from airflow.exceptions import AirflowException
 from airflow.providers.docker.operators.docker import DockerOperator
+from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import DAG
 from airflow.sdk.log import mask_secret
 from docker.types import Mount
+from prediction_deployment import deploy_prediction
 
 # These are daemon-side paths. /opt/airflow is the scheduler's filesystem and
 # cannot be used as a bind source for a sibling container on Docker Desktop.
@@ -37,18 +40,31 @@ class MLflowTrainingOperator(DockerOperator):
             )
         mask_secret(credentials['MLFLOW_TRACKING_PASSWORD'])
         self._private_environment.update(credentials)
-        return super().execute(context)
+        last_line = super().execute(context)
+        prefix = 'TRAINING_RESULT_JSON='
+        if not isinstance(last_line, str) or not last_line.startswith(prefix):
+            raise AirflowException(
+                'Training did not return a structured model version; deployment blocked'
+            )
+        result = json.loads(last_line[len(prefix) :])
+        if (
+            result.get('model_name') != 'movie-genre-knn'
+            or not str(result.get('model_version', '')).isdecimal()
+            or not result.get('run_id')
+        ):
+            raise AirflowException('Invalid training result; deployment blocked')
+        return result
 
 
 with DAG(
     dag_id='training_pipeline',
-    description='Prepare feature matrices, then train and register KNN in MLflow.',
+    description='Prepare data, register KNN, then deploy and verify the exact model version.',
     start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
     schedule=None,
     catchup=False,
     max_active_runs=1,
     max_active_tasks=1,
-    dagrun_timeout=timedelta(minutes=45),
+    dagrun_timeout=timedelta(minutes=75),
     tags=['data-preparation', 'knn', 'training', 'movie-reco'],
 ) as dag:
     prepare_features = DockerOperator(
@@ -108,11 +124,19 @@ with DAG(
         network_mode='bridge',
         mount_tmp_dir=False,
         auto_remove='force',
-        do_xcom_push=False,
+        do_xcom_push=True,
         # Retrying after partial registration could create another model version.
         retries=0,
         execution_timeout=timedelta(minutes=30),
         labels={'project': 'movie-reco', 'managed_by': 'airflow', 'job': 'train_knn'},
     )
 
-    prepare_features >> train_knn
+    deploy_predict = PythonOperator(
+        task_id='deploy_predict',
+        python_callable=deploy_prediction,
+        op_kwargs={'training_result': train_knn.output},
+        retries=0,
+        execution_timeout=timedelta(minutes=20),
+    )
+
+    prepare_features >> train_knn >> deploy_predict

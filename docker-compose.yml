@@ -11,7 +11,10 @@ x-api-healthcheck: &api-healthcheck
   start_interval: 1s
 
 x-airflow-common: &airflow-common
-  image: apache/airflow:3.3.2
+  image: movie-reco-airflow:local
+  build:
+    context: .
+    dockerfile: airflow/Dockerfile
   environment: &airflow-environment
     # The generated password uses URL-safe hexadecimal characters.
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_POSTGRES_USER:-airflow}:${AIRFLOW_POSTGRES_PASSWORD:?Set AIRFLOW_POSTGRES_PASSWORD in .env}@airflow-postgres:5432/${AIRFLOW_POSTGRES_DB:-airflow}
@@ -203,6 +206,7 @@ services:
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow}
       MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-}
       MLFLOW_TRACKING_PASSWORD: ${DAGSHUB_TOKEN:-}
+      PREDICT_SMOKE_TOKEN: ${PREDICT_SMOKE_TOKEN:-alice-token}
     # LocalExecutor runs DockerOperator here. Group 0 matches the socket on
     # Docker Desktop; override AIRFLOW_DOCKER_GID for a different Linux host.
     group_add:
@@ -211,6 +215,9 @@ services:
       - ./airflow/dags:/opt/airflow/dags:ro
       - airflow_logs:/opt/airflow/logs
       - /var/run/docker.sock:/var/run/docker.sock
+      # Compose inside Scheduler must use the same absolute path as the daemon.
+      # Write access is used only to persist the selected version in root .env.
+      - .:${AIRFLOW_DOCKER_PROJECT_DIR:?Run python airflow/setup_local.py}
     command: ["scheduler"]
     restart: unless-stopped
     healthcheck:

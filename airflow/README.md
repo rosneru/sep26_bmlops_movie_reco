@@ -1,9 +1,9 @@
 # Local Airflow infrastructure
 
-All services live in the main `docker-compose.yml`, using Airflow 3.3.2 and
+All services live in the main `docker-compose.yml`, using a local image based on Airflow 3.3.2 and
 PostgreSQL 16. The API server provides the dashboard, the scheduler coordinates
 work with LocalExecutor, and the DAG processor parses files in `airflow/dags`.
-There is no Redis or separate Celery worker. A manual infrastructure smoke-test DAG is included; the data preparation DAG runs the existing preparation image through DockerOperator.
+There is no Redis or separate Celery worker. A manual infrastructure smoke-test DAG is included; the training pipeline prepares data, registers KNN and deploys/verifies its exact version.
 
 ## Local settings
 
@@ -53,7 +53,7 @@ Run from the repository root:
 docker volume create movie-reco-airflow-postgres-data
 docker compose config --quiet
 docker compose up -d --wait airflow-postgres
-docker compose run --rm airflow-init
+docker compose run --rm --build airflow-init
 docker compose run --rm airflow-init db check
 docker compose run --rm airflow-init db check-migrations --migration-wait-timeout 30
 ```
@@ -70,7 +70,7 @@ only; modifying `.env` does not change existing users or their passwords.
 Initialize the database first, then run:
 
 ```powershell
-docker compose up -d --wait airflow-api-server airflow-scheduler airflow-dag-processor
+docker compose up -d --build --wait airflow-api-server airflow-scheduler airflow-dag-processor
 docker compose ps airflow-postgres airflow-api-server airflow-scheduler airflow-dag-processor
 ```
 
@@ -88,8 +88,7 @@ docker compose stop airflow-api-server airflow-scheduler airflow-dag-processor a
 
 Database initialization is intentionally still manual: `airflow-init` has its
 own profile. Normal Compose up does not run it. Automatic startup gating on
-successful initialization is a planned later step, as is
-prediction deployment. Starting the infrastructure does not run training;
+successful initialization is a planned later step, while prediction deployment is handled by the final DAG task. Starting the infrastructure does not run training;
 manually triggering the training_pipeline DAG now trains/registers a KNN version.
 
 References:
@@ -119,22 +118,22 @@ docker compose restart airflow-dag-processor
 
 There is no separate pytest file for this check; use the DAG directly in the UI.
 
-## Run preparation and KNN training from Airflow
+## Run preparation, KNN training and prediction deployment
 
 DAG: `airflow/dags/training_pipeline.py`, shown as `training_pipeline` in the UI.
-It has two sequential tasks: `prepare_features -> train_knn`. The first uses
+It has three sequential tasks: `prepare_features -> train_knn -> deploy_predict`. The first uses
 DockerOperator with `movie-reco-data-preparation:local`. The second uses a small
 DockerOperator subclass with `movie-reco-train:knn`; it resolves MLflow credentials
 only at task execution. Both create sibling containers through Docker Engine,
 not Docker Compose commands. Preparation reads `split.current_part` from the
 mounted `params.yaml`. No trigger parameter is required or used in this version.
-The DAG ID is `training_pipeline`, reflecting both preparation and training.
+The DAG ID is `training_pipeline`, covering preparation, training and deployment.
 Historical runs under the old `data_preparation` ID remain in Airflow history;
 that old DAG is no longer defined in the source. Use only `training_pipeline` for new runs.
 
 The pinned official `apache/airflow:3.3.2` image already includes Docker provider
-4.5.9, verified in the installed image, so no custom Airflow Dockerfile or package
-installation is necessary. Only the scheduler has the Docker socket mounted,
+4.5.9, verified in the installed image, so no extra Python provider installation is necessary. `airflow/Dockerfile` now
+adds the static Docker CLI and Compose plugin required for prediction deployment. Only the scheduler has the Docker socket mounted,
 because LocalExecutor runs task processes there. Socket access gives that service
 control over the host Docker Engine; the API and DAG processor do not get it.
 
@@ -145,9 +144,12 @@ python airflow/setup_local.py
 docker compose config --quiet
 docker compose build data_preparation
 $env:MODEL_TYPE = "knn"
-docker compose build train
+docker compose build train airflow-scheduler
+$env:PREDICT_MODEL_TYPE = "knn"
+docker compose build predict
+Remove-Item Env:PREDICT_MODEL_TYPE -ErrorAction SilentlyContinue
 Remove-Item Env:MODEL_TYPE -ErrorAction SilentlyContinue
-docker compose up -d --wait airflow-api-server airflow-scheduler airflow-dag-processor
+docker compose up -d --build --wait airflow-api-server airflow-scheduler airflow-dag-processor
 ```
 
 The helper fills missing `AIRFLOW_DOCKER_PROJECT_DIR` and `AIRFLOW_DOCKER_GID`
@@ -176,8 +178,9 @@ Airflow user with this supplementary group, not as root.
 5. In its log, find `Data preparation passed: ratings=..., users=..., movies=..., genres=...`.
 6. Wait for `train_knn` to reach `success`; it runs only after preparation succeeds.
 7. In the training log, find `MLflow run ID:` and `Registry URI: models:/movie-genre-knn/<version>`.
-8. Open DagsHub MLflow and confirm that run and the registered model version exist.
-9. Verify the host output files:
+8. Wait for `deploy_predict` to succeed, then inspect its exact model URI in the task log.
+9. Open DagsHub MLflow and confirm that run and registered version exist.
+10. Verify the host output files:
 
 ```powershell
 Get-Item data/processed/user_matrix.csv, data/processed/movie_matrix.csv |
@@ -190,7 +193,7 @@ write the same output files. Preparation has networking disabled. Training has
 outbound bridge networking for DagsHub and a read-only processed-data mount.
 Each child container is removed after success or failure; stdout/stderr remains
 in the Airflow task log. A successful trigger registers a new KNN model version.
-It does not restart or change the prediction service. `mount_tmp_dir=False`
+The final task recreates the three prediction replicas with that exact version, then checks each replica and nginx. `mount_tmp_dir=False`
 avoids trying to mount a temporary directory that exists only in the scheduler.
 
 If the DAG is not discovered, restart `airflow-dag-processor`. If an image is
@@ -230,4 +233,109 @@ Write access to the configured DagsHub project. Training cannot complete until
 that access is fixed. No automatic retry is configured because a partial run may
 already have registered a model version. Re-triggering the DAG prepares data again
 and can register another version; it does not reuse a previously completed model.
-The training task timeout is 30 minutes; the DAG timeout is 45 minutes.
+The training task timeout is 30 minutes; deployment is limited to 20 minutes, and the DAG to 75 minutes.
+
+## Exact-version prediction deployment
+
+`train_model.py` prints `TRAINING_RESULT_JSON=...` as its last stdout line after
+the MLflow run closes. `MLflowTrainingOperator` validates this record and returns
+only model name, numeric version and training Run ID through XCom. It never uses
+`latest` to decide what to deploy. If this handoff is missing/invalid, deployment
+is blocked even if a model version was registered remotely.
+
+`deploy_predict` calls `airflow/dags/prediction_deployment.py` at task execution:
+
+1. Require three healthy, consistent running KNN replicas and a running nginx.
+2. Read their actual served model version and immutable Docker image ID for rollback.
+3. Start an isolated candidate API container with the newly built prediction image
+   and the exact model version from training; check authenticated `/model` and
+   `/predict` before touching the live service.
+4. Use Compose to recreate only `predict`, with three replicas, an explicit image
+   ID and model version. No build/pull or unrelated service restart happens here.
+5. Check the version and a real seeded prediction on every replica, reload nginx
+   DNS/upstreams, and verify both endpoints through nginx as well.
+6. Persist `PREDICT_MODEL_TYPE`, `PREDICT_MODEL_NAME`, `PREDICT_MODEL_VERSION` in
+   root `.env`, preserving other settings. Future normal Compose starts use that
+   numeric version. There is no separate password or release JSON file.
+7. On failure after rollout begins, recreate the previous model/image, verify it,
+   and persist the restored version. The Airflow task remains failed so the
+   unsuccessful release is visible. Preflight failure leaves live replicas alone.
+
+The Scheduler mounts the project at the same absolute daemon-visible path so
+Compose's relative bind paths resolve correctly on Docker Desktop. This mount
+is writable because the task updates only the three serving-selection keys in
+`.env`; it also makes the local `.env` accessible to that execution container.
+The API and DAG processor do not get this project-root mount or Docker socket.
+Temporary `.env.rollout-*` files are excluded from Git and Docker build context.
+
+`PREDICT_SMOKE_TOKEN` in `.env` selects a valid existing predict API account token
+(default `alice-token`, the project's demo account). The check selects an existing
+user ID from the processed user matrix and expects ten distinct movie IDs. This
+is a functional serving check, not a recommendation-quality evaluation.
+
+The rollout recreates the replicas and may briefly interrupt requests; this is
+not a zero-downtime deployment. Automatic rollback is attempted for handled task
+errors, not guaranteed after a host crash or forced task termination. It restores
+model/image selection, not historical processed CSVs. Do not edit `.env`, change
+models, scale predict, or run another Compose/DVC preparation while this DAG is
+running. Retain the previous local image and registered model for rollback.
+
+To check the active selection from PowerShell after a successful run:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/model -Headers @{Authorization="Bearer alice-token"}
+```
+
+Use your configured API token if changed. The returned model URI must match the
+training result. Also check `docker compose ps predict` for three healthy replicas.
+Updating `.env` serving selection does not change API login credentials.
+
+## Manual failure test: preparation blocks downstream tasks
+
+This verifies `prepare_features -> train_knn -> deploy_predict` uses the default
+`all_success` dependency rule. Run it only when no other pipeline run or manual
+preparation is active, because `params.yaml` is shared by all preparation jobs.
+
+1. Note the existing `split.current_part` value in root `params.yaml`.
+2. Temporarily change only that value to `0`; leave `n_parts` unchanged:
+
+```yaml
+split:
+  n_parts: 8
+  current_part: 0
+```
+
+3. Open http://localhost:8081 and trigger a **new** `training_pipeline` run.
+   No image rebuild or container restart is required: preparation reads the
+   bind-mounted `params.yaml` on every run.
+4. Wait for the scheduler to record the final states:
+
+```text
+prepare_features -> failed
+train_knn        -> upstream_failed
+deploy_predict   -> upstream_failed
+```
+
+5. Open the preparation task log. Expect
+   `current_part must be a positive integer`. The downstream tasks must not
+   start; `upstream_failed` indicates a blocked prerequisite, not an attempted
+   training/deployment failure. The overall run is expected to fail.
+6. Confirm no model version was registered by this run and the prediction
+   service continues serving the previous version. Optionally compare the
+   following output before and after the test:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/model -Headers @{
+    Authorization = "Bearer alice-token"
+}
+```
+
+Use your configured API token if different. This validation error happens
+before processed CSVs are replaced, so existing outputs remain unchanged.
+
+7. Restore `split.current_part` to its original value immediately after the
+   test, including if the test is interrupted. Do not commit the temporary `0`.
+   You may trigger a new valid run afterward; that run will train/register and
+   deploy a new version normally. Keep the intentional failed run as evidence.
+
+This is a manual fault-injection check; it does not require a pytest file.
