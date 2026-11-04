@@ -1,5 +1,6 @@
 """Coordinate training, tracking and export through the selected implementation."""
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -50,7 +51,9 @@ def main():
             # Upload the exported model, then create a version in the registry.
             mlflow.log_artifacts(str(model_directory), artifact_path='model')
             model_uri = f'runs:/{run.info.run_id}/model'
-            version = mlflow.register_model(model_uri, config.MLFLOW_REGISTERED_MODEL_NAME)
+            version = mlflow.register_model(
+                model_uri, config.MLFLOW_REGISTERED_MODEL_NAME
+            )
 
         client = mlflow.MlflowClient()
 
@@ -61,11 +64,30 @@ def main():
         }
         for key, value in version_tags.items():
             client.set_model_version_tag(
-                config.MLFLOW_REGISTERED_MODEL_NAME, str(version.version), key, str(value)
+                config.MLFLOW_REGISTERED_MODEL_NAME,
+                str(version.version),
+                key,
+                str(value),
             )
 
         print(f'MLflow run ID: {run.info.run_id}')
-        print(f'Registry URI: models:/{config.MLFLOW_REGISTERED_MODEL_NAME}/{version.version}')
+        print(
+            f'Registry URI: models:/{config.MLFLOW_REGISTERED_MODEL_NAME}/{version.version}'
+        )
+
+    # Final stdout line is the machine-readable handoff to Airflow. Emit only
+    # after the MLflow run closes successfully; never resolve 'latest' to deploy.
+    print(
+        'TRAINING_RESULT_JSON='
+        + json.dumps(
+            {
+                'model_name': config.MLFLOW_REGISTERED_MODEL_NAME,
+                'model_version': str(version.version),
+                'run_id': run.info.run_id,
+            }
+        ),
+        flush=True,
+    )
 
 
 if __name__ == '__main__':

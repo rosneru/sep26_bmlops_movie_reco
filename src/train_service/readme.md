@@ -15,8 +15,10 @@ Training receives MODEL_TYPE and MLFLOW_TRACKING_URI. The same MODEL_TYPE select
 the image tag and build dependencies. It selects a training candidate, not the
 model served by prediction. Prediction still uses the existing KNN artifact;
 future integration should select its registered model and version independently.
-Airflow can later coordinate training, validation, and promotion without making
-every service share the same model selection or credentials.
+The Airflow `training_pipeline` DAG now runs feature preparation followed by KNN
+training and MLflow registration. See `airflow/README.md` for PowerShell setup
+and dashboard verification. Its final task deploys and verifies the exact registered
+KNN version across the three prediction replicas.
 
 The following one-command overrides take precedence over `.env`:
 
@@ -249,3 +251,13 @@ Held-out user splits do not establish recommendation ranking quality. Recall@K,
 NDCG@K and evaluation against held-out interactions are not implemented. The current
 workflow demonstrates training, experiment tracking, model storage and registration;
 it does not establish real-world recommendation quality.
+
+
+## Airflow training result handoff
+
+After successful MLflow run completion, the final stdout line is
+`TRAINING_RESULT_JSON={...}` with `model_name`, `model_version`, and `run_id`.
+The `training_pipeline` DAG passes that exact version to prediction deployment
+through XCom. No credentials or model binary are included in XCom. Rebuild the
+training image after this script changes; an old image without the final result
+line is deliberately rejected by the deployment pipeline.
