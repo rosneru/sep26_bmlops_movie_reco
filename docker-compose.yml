@@ -25,6 +25,8 @@ x-airflow-common: &airflow-common
     # FAB stores dashboard accounts as password hashes in PostgreSQL.
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     AIRFLOW__API__BASE_URL: http://localhost:8081
+    # Mount sources interpreted by Docker Engine, not paths inside Airflow.
+    AIRFLOW_DOCKER_PROJECT_DIR: ${AIRFLOW_DOCKER_PROJECT_DIR:?Run python airflow/setup_local.py}
   volumes:
     - ./airflow/dags:/opt/airflow/dags:ro
     - airflow_logs:/opt/airflow/logs
@@ -194,6 +196,14 @@ services:
 
   airflow-scheduler:
     <<: *airflow-common
+    # LocalExecutor runs DockerOperator here. Group 0 matches the socket on
+    # Docker Desktop; override AIRFLOW_DOCKER_GID for a different Linux host.
+    group_add:
+      - "${AIRFLOW_DOCKER_GID:-0}"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - airflow_logs:/opt/airflow/logs
+      - /var/run/docker.sock:/var/run/docker.sock
     command: ["scheduler"]
     restart: unless-stopped
     healthcheck:
