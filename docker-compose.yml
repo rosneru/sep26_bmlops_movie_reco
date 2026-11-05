@@ -1,5 +1,8 @@
 name: movie-reco
 
+include:
+  - ./compose.airflow.yml
+
 # Healthcheck: the container counts as healthy once uvicorn answers (python is
 # the only tool available in the image)
 x-api-healthcheck: &api-healthcheck
@@ -9,35 +12,6 @@ x-api-healthcheck: &api-healthcheck
   retries: 3
   start_period: 30s
   start_interval: 1s
-
-x-airflow-common: &airflow-common
-  image: movie-reco-airflow:local
-  build:
-    context: .
-    dockerfile: airflow/Dockerfile
-  environment: &airflow-environment
-    # The generated password uses URL-safe hexadecimal characters.
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_POSTGRES_USER:-airflow}:${AIRFLOW_POSTGRES_PASSWORD:?Set AIRFLOW_POSTGRES_PASSWORD in .env}@airflow-postgres:5432/${AIRFLOW_POSTGRES_DB:-airflow}
-    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-    AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__CORE__PARALLELISM: "4"
-    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
-    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
-    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?Run python airflow/setup_local.py}
-    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Run python airflow/setup_local.py}
-    # FAB stores dashboard accounts as password hashes in PostgreSQL.
-    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
-    AIRFLOW__API__BASE_URL: http://localhost:8081
-    # Mount sources interpreted by Docker Engine, not paths inside Airflow.
-    AIRFLOW_DOCKER_PROJECT_DIR: ${AIRFLOW_DOCKER_PROJECT_DIR:?Run python airflow/setup_local.py}
-  volumes:
-    - ./airflow/dags:/opt/airflow/dags:ro
-    - airflow_logs:/opt/airflow/logs
-  depends_on:
-    airflow-postgres:
-      condition: service_healthy
-    airflow-init:
-      condition: service_completed_successfully
 
 services:
   data_collection:
@@ -250,10 +224,3 @@ services:
 volumes:
   prometheus_data:
   grafana_data:
-  airflow_logs:
-
-  # Reuse the database volume created during the initial Airflow setup.
-  # External ownership prevents Compose down -v from removing this database.
-  airflow_postgres_data:
-    external: true
-    name: movie-reco-airflow-postgres-data
