@@ -103,7 +103,7 @@ jobs:
             -H "Authorization: Bearer $TOKEN" \
             -X POST http://localhost:8000/predict \
             -H 'Content-Type: application/json' \
-            -d '{"user_ids":[21525],"seed":42}'
+            -d '{"user_ids":[1],"seed":42}'
 
       - name: Show service status and logs
         if: always()
