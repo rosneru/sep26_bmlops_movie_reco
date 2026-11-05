@@ -98,3 +98,77 @@ docker compose -p movie-reco-test -f docker-compose.yml -f docker-compose.test.y
 
 Use PREDICT_MODEL_TYPE=two_tower for optional PyTorch coverage. Synthetic tests
 check the integration and alignment, not real recommendation performance.
+
+
+## Airflow deployment
+
+The final `deploy_predict` task in `training_pipeline` now deploys the exact model
+version returned by training to all three Compose replicas. It preflights a
+candidate, verifies `/model` and `/predict` on each replica and through nginx,
+and persists the selected numeric version in root `.env`. Handled rollout errors
+attempt restoration of the previous model and image. See `airflow/README.md` for
+setup, expected brief interruption, verification and rollback limitations.
+
+## Manual verification after Airflow deployment (PowerShell / Swagger)
+
+1. In http://localhost:8081, trigger `training_pipeline` and wait for
+   `prepare_features`, `train_knn`, and `deploy_predict` to succeed. This registers
+   and deploys a new model version. To test the already deployed model without
+   creating another version, skip this step.
+2. Run `docker compose ps predict`; expect three healthy replicas.
+3. Open http://localhost:8000/docs and click **Authorize**.
+4. Under **HTTPBearer**, enter exactly `alice-token` (without a `Bearer` prefix),
+   then click its **Authorize** button and **Close**. HTTPBasic can remain empty.
+   This is a demo predict API token from `src/user_authentication_service/auth.py`,
+   not a DagsHub token. Use your own API credentials if these have been changed.
+5. Find valid recommendation profile IDs in the current processed data:
+
+```powershell
+Import-Csv data/processed/user_matrix.csv |
+    Select-Object -First 5 userId
+```
+
+6. Expand **POST /predict**, click **Try it out**, and use an ID printed above.
+   For example, use this body only if user `4` exists in your current matrix:
+
+```json
+{
+  "user_ids": [4],
+  "seed": 42
+}
+```
+
+7. Click **Execute**. Expect HTTP `200` and `recommendations` containing the
+   selected `user_id` and ten distinct `movie_ids`. The seed makes the selection
+   repeatable for the same model and profile. Numeric movie IDs are returned,
+   not titles or predicted rating scores.
+8. Execute **GET /model** with the same authorization. Its `model_uri` must match
+   the exact version printed in the corresponding training/deployment log.
+
+Troubleshooting:
+
+- HTTP `401`, `Invalid or missing credentials`: authorize again and re-execute.
+  The generated Curl must contain `Authorization: Bearer alice-token` (or your
+  configured API token). The Swagger **Authorized** label alone does not prove
+  the credential is valid; the API response does.
+- HTTP `404`, `Unknown user ids`: authentication passed, but the requested user
+  profiles are absent from the loaded user matrix. IDs `1`, `2`, `3` are examples,
+  not guaranteed profiles. Select actual IDs with the command above. The login
+  account `alice` and numeric recommendation profile IDs are separate concepts.
+- If a locally listed ID is still rejected, confirm the API was redeployed after
+  the latest preparation. Each replica loads its user matrix only at startup.
+- If Swagger's generated Curl has no Authorization header, credentials were not
+  applied to that request. Authorize first, then click Execute again.
+
+Equivalent direct request from PowerShell:
+
+```powershell
+$headers = @{ Authorization = "Bearer alice-token" }
+$userId = [int](Import-Csv data/processed/user_matrix.csv |
+    Select-Object -First 1).userId
+$body = @{ user_ids = @($userId); seed = 42 } | ConvertTo-Json
+Invoke-RestMethod http://localhost:8000/predict `
+    -Method Post -Headers $headers -ContentType "application/json" -Body $body |
+    ConvertTo-Json -Depth 5
+Invoke-RestMethod http://localhost:8000/model -Headers $headers
+```

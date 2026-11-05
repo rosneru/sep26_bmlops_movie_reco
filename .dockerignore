@@ -6,6 +6,7 @@
 .claude
 .ruff_cache
 .env
+.env.rollout-*
 **/__pycache__
 data/raw
 data/interim

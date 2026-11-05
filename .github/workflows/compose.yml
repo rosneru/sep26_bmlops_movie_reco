@@ -35,9 +35,13 @@ jobs:
       DAGSHUB_BUCKET: ci-dummy-bucket
       DAGSHUB_TOKEN: ci-dummy-token
       AUTH_SECRET_KEY: ci-dummy-secret
+      AIRFLOW_POSTGRES_PASSWORD: ci-airflow-postgres
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      - name: Prepare Airflow configuration
+        run: python3 airflow/setup_local.py
 
       - name: Validate Compose configuration
         run: docker compose config --quiet
@@ -80,8 +84,8 @@ jobs:
       - name: Register disposable KNN model
         run: docker compose run --rm train
 
-      - name: Start all services using built images
-        run: docker compose up -d --no-build --wait --wait-timeout 120
+      - name: Start prediction stack
+        run: docker compose up -d --no-build --wait --wait-timeout 120 nginx
 
       - name: Test versioned registry loading
         run: |
