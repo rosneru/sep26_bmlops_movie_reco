@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 import config
 from predict_service.model_loader import load_registered_model
 from user_authentication_service.auth import require_predict_access
+from user_authentication_service.auth import router as auth_router
 
 recommender = load_registered_model()
 user_matrix = pd.read_csv(
@@ -27,6 +28,7 @@ app = FastAPI(
     description='Recommends movies to users based on their genre preferences.',
     version='0.1.0',
 )
+app.include_router(auth_router)
 
 
 # data model for input query

@@ -1,38 +1,42 @@
 """Integration-style tests of /predict without ML artifacts or external services.
 
-We stub model loading and provide tiny CSV matrices so these tests can run
-without downloading the DVC datasets. Authentication itself is not mocked.
+We replace the MLflow model loader with a fake and provide a tiny user matrix,
+so these tests need neither mlflow nor the DVC datasets. Authentication itself
+is not mocked.
 """
 
 import importlib
 import sys
+import types
 
+import numpy as np
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 
-class FakeNearestNeighbors:
-    def kneighbors(self, users):
+class FakeRecommender:
+    genres = ('feature',)
+    movie_ids = np.arange(1, 21)
+    uri = 'models:/fake/1'
+    model_type = 'fake'
+
+    def candidates(self, users, n_neighbors):
         raise AssertionError('The unknown-ID request must fail before model inference')
 
 
 @pytest.fixture
 def predict_client(tmp_path, monkeypatch):
     user_path = tmp_path / 'users.csv'
-    movie_path = tmp_path / 'movies.csv'
     pd.DataFrame({'userId': [21525], 'feature': [1.0]}).to_csv(user_path, index=False)
-    pd.DataFrame({'movieId': [1, 2]}).to_csv(movie_path, index=False)
-    model_path = tmp_path / 'model.pkl'
-    model_path.write_bytes(b'placeholder')
-
-    monkeypatch.setenv('MODEL_PATH', str(model_path))
     monkeypatch.setenv('USER_MATRIX_PATH', str(user_path))
-    monkeypatch.setenv('MOVIE_MATRIX_PATH', str(movie_path))
 
-    # Avoid unpickling a large model or requiring an exact sklearn version.
-    import pickle
-    monkeypatch.setattr(pickle, 'load', lambda stream: FakeNearestNeighbors())
+    # predict.py imports load_registered_model from this module. The fake
+    # module returns a FakeRecommender, so mlflow is never imported.
+    fake_loader = types.ModuleType('predict_service.model_loader')
+    fake_loader.load_registered_model = FakeRecommender
+    monkeypatch.setitem(sys.modules, 'predict_service.model_loader', fake_loader)
+
     sys.modules.pop('predict_service.predict', None)
     try:
         module = importlib.import_module('predict_service.predict')
@@ -41,18 +45,23 @@ def predict_client(tmp_path, monkeypatch):
         sys.modules.pop('predict_service.predict', None)
 
 
+def login(client, username, password):
+    return client.post('/token', data={'username': username, 'password': password})
+
+
 def test_unknown_movielens_user_id_returns_404_after_auth(predict_client):
+    token = login(predict_client, 'alice', 'alice123').json()['access_token']
     response = predict_client.post(
-        '/predict', auth=('alice', 'alice123'), json={'user_ids': [999999999]}
+        '/predict',
+        headers={'Authorization': f'Bearer {token}'},
+        json={'user_ids': [999999999]},
     )
     assert response.status_code == 404
     assert response.json() == {'detail': 'Unknown user ids: [999999999]'}
 
 
-def test_unknown_login_username_returns_401_before_user_lookup(predict_client):
-    response = predict_client.post(
-        '/predict', auth=('nonexistent', 'some-password'), json={'user_ids': [999999999]}
-    )
+def test_unknown_login_username_is_rejected_at_login(predict_client):
+    response = login(predict_client, 'nonexistent', 'some-password')
     assert response.status_code == 401
 
 

@@ -27,6 +27,8 @@ wheels/
 # model
 *.Python
 *.json
+# Demo users for tests and CI; the real users.json stays local
+!src/user_authentication_service/users.example.json
 
 # Obsolete intermediate training datasets; preparation now runs in memory
 /data/processed/two_tower/
