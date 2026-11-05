@@ -8,7 +8,7 @@ server, scheduler and DAG processor only after initialization exits successfully
 Existing database contents and run history are preserved. No separate init
 command is required for normal startup.
 
-With the root `.env` configured and the external database volume already created,
+With the root `.env` configured,
 run from the repository root in PowerShell:
 
 ```powershell
@@ -22,9 +22,9 @@ Starting these services does not trigger training; run `training_pipeline`
 manually from the dashboard. If initialization fails, inspect
 `docker compose logs airflow-init`; new Airflow runtime services remain blocked.
 Use Compose `up` for this dependency ordering; `restart` does not replay it.
-For a new machine without local settings/volume, follow the setup sections below.
+For a new machine without local settings, follow the setup sections below.
 
-All services live in the main `docker-compose.yml`, using a local image based on Airflow 3.3.2 and
+The main `docker-compose.yml` includes `compose.airflow.yml`, which uses a local image based on Airflow 3.3.2 and
 PostgreSQL 16. The API server provides the dashboard, the scheduler coordinates
 work with LocalExecutor, and the DAG processor parses files in `airflow/dags`.
 There is no Redis or separate Celery worker. A manual infrastructure smoke-test DAG is included; the training pipeline prepares data, registers KNN and deploys/verifies its exact version.
@@ -32,18 +32,12 @@ There is no Redis or separate Celery worker. A manual infrastructure smoke-test 
 ## Local settings
 
 Compose reads `.env` in the repository root, including the existing required
-DagsHub and Grafana variables. Set these database settings there:
+DagsHub and Grafana variables. The database user and name both default to
+`airflow` and can be overridden in `.env`.
 
-```dotenv
-AIRFLOW_POSTGRES_USER=airflow
-AIRFLOW_POSTGRES_DB=airflow
-AIRFLOW_POSTGRES_PASSWORD=your-random-hexadecimal-password
-```
-
-Run the setup helper; it generates missing encryption/signing keys in `.env` and
-dashboard credentials in the same root `.env` file, which is ignored by Git.
-Existing nonempty settings are preserved; no separate password directory or
-JSON file is created.
+Run the setup helper to fill in missing encryption and signing keys, dashboard
+credentials, and a hexadecimal PostgreSQL password in the root `.env` file.
+Git ignores this file. The helper preserves existing nonempty values.
 
 ```powershell
 python airflow/setup_local.py
@@ -74,7 +68,6 @@ is bound to the local machine only: http://localhost:8081.
 Run from the repository root:
 
 ```powershell
-docker volume create movie-reco-airflow-postgres-data
 docker compose config --quiet
 docker compose up -d --build --wait airflow-api-server airflow-scheduler airflow-dag-processor
 # Optional read-only database diagnostics:
@@ -83,11 +76,11 @@ docker compose run --rm airflow-init db check-migrations --migration-wait-timeou
 ```
 
 The database hostname inside Docker is `airflow-postgres`, port 5432; no database
-port is published to Windows. The named external volume
-`movie-reco-airflow-postgres-data` persists the database and is not deleted by
-Compose down, even with `-v`. On a fresh machine the volume-create command is
-required. PostgreSQL user/password/database settings initialize an empty volume
-only; modifying `.env` does not change existing users or their passwords.
+port is published to Windows. Compose creates a database volume for each project.
+The default project uses `movie-reco-airflow-postgres-data`. Ordinary
+`docker compose down` preserves the database. Avoid `docker compose down -v`
+when you want to keep it. PostgreSQL user, password, and database settings
+initialize an empty volume. Changing `.env` does not update existing accounts.
 
 ## Start and verify the dashboard infrastructure
 
@@ -233,8 +226,7 @@ verify the daemon-side path. Rebuild the preparation image after changes to its
 code, Dockerfile or requirements; the DockerOperator does not build it for you.
 
 Fresh database setup also uses the automatic Compose startup gate described
-above. There is no separate mandatory init command. The external PostgreSQL
-volume must still be created once on a new machine.
+above. Compose creates the PostgreSQL volume and runs migrations.
 
 ### MLflow credentials and training failure checks
 
@@ -373,7 +365,7 @@ This is a manual fault-injection check; it does not require a pytest file.
 
 ## Verify automatic startup ordering
 
-Run from the repository root after local `.env` setup and external volume creation:
+Run from the repository root after local `.env` setup:
 
 ```powershell
 docker compose up -d --build --wait airflow-api-server airflow-scheduler airflow-dag-processor

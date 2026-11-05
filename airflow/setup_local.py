@@ -1,8 +1,8 @@
-"""Generate missing local Airflow keys and a persistent dashboard password.
+"""Generate missing local Airflow keys and persistent passwords.
 
 Run with Python from any directory. Uses only the standard library, preserves
-existing nonempty settings, and never prints secrets. PostgreSQL setup is kept
-separate; this script does not initialize the database or start containers.
+existing nonempty settings, and never prints secrets. This script does not
+initialize the database or start containers.
 """
 
 import base64
@@ -28,6 +28,7 @@ def main():
             secrets.token_bytes(32)
         ).decode(),
         'AIRFLOW_JWT_SECRET': secrets.token_hex(32),
+        'AIRFLOW_POSTGRES_PASSWORD': secrets.token_hex(24),
         'AIRFLOW_ADMIN_USER': 'airflow',
         'AIRFLOW_ADMIN_PASSWORD': secrets.token_urlsafe(24),
         'AIRFLOW_DOCKER_PROJECT_DIR': docker_project_dir,
@@ -45,7 +46,7 @@ def main():
     env_path.write_text(content, encoding='utf-8')
 
     (root / 'airflow' / 'dags').mkdir(parents=True, exist_ok=True)
-    print('Local Airflow keys and dashboard credentials are ready.')
+    print('Local Airflow keys and credentials are ready.')
     print('Dashboard username/password location: root .env (ignored by Git)')
 
 
