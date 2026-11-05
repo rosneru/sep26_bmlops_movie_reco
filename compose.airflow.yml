@@ -124,8 +124,5 @@ services:
 volumes:
   airflow_logs:
 
-  # Reuse the database volume created during the initial Airflow setup.
-  # External ownership prevents Compose down -v from removing this database.
   airflow_postgres_data:
-    external: true
-    name: movie-reco-airflow-postgres-data
+    name: ${COMPOSE_PROJECT_NAME}-airflow-postgres-data
