@@ -1,5 +1,8 @@
 name: movie-reco
 
+include:
+  - ./compose.airflow.yml
+
 # Healthcheck: the container counts as healthy once uvicorn answers (python is
 # the only tool available in the image)
 x-api-healthcheck: &api-healthcheck
@@ -9,35 +12,6 @@ x-api-healthcheck: &api-healthcheck
   retries: 3
   start_period: 30s
   start_interval: 1s
-
-x-airflow-common: &airflow-common
-  image: movie-reco-airflow:local
-  build:
-    context: .
-    dockerfile: airflow/Dockerfile
-  environment: &airflow-environment
-    # The generated password uses URL-safe hexadecimal characters.
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_POSTGRES_USER:-airflow}:${AIRFLOW_POSTGRES_PASSWORD:?Set AIRFLOW_POSTGRES_PASSWORD in .env}@airflow-postgres:5432/${AIRFLOW_POSTGRES_DB:-airflow}
-    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-    AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__CORE__PARALLELISM: "4"
-    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
-    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
-    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?Run python airflow/setup_local.py}
-    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Run python airflow/setup_local.py}
-    # FAB stores dashboard accounts as password hashes in PostgreSQL.
-    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
-    AIRFLOW__API__BASE_URL: http://localhost:8081
-    # Mount sources interpreted by Docker Engine, not paths inside Airflow.
-    AIRFLOW_DOCKER_PROJECT_DIR: ${AIRFLOW_DOCKER_PROJECT_DIR:?Run python airflow/setup_local.py}
-  volumes:
-    - ./airflow/dags:/opt/airflow/dags:ro
-    - airflow_logs:/opt/airflow/logs
-  depends_on:
-    airflow-postgres:
-      condition: service_healthy
-    airflow-init:
-      condition: service_completed_successfully
 
 services:
   data_collection:
@@ -152,106 +126,7 @@ services:
     depends_on:
       - prometheus
 
-  airflow-postgres:
-    image: postgres:16-bookworm
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${AIRFLOW_POSTGRES_USER:-airflow}
-      POSTGRES_PASSWORD: ${AIRFLOW_POSTGRES_PASSWORD:?Set AIRFLOW_POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${AIRFLOW_POSTGRES_DB:-airflow}
-    # Internal network only: no host port or collision with existing databases.
-    volumes:
-      - airflow_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
-
-  # One-off initialization; exit code 0 means migrations completed successfully.
-  airflow-init:
-    <<: *airflow-common
-    # Override common dependencies to avoid depending on ourselves.
-    depends_on:
-      airflow-postgres:
-        condition: service_healthy
-    command: ["db", "migrate"]
-    restart: "no"
-
-  # These services start only after airflow-init completes successfully.
-  airflow-api-server:
-    <<: *airflow-common
-    environment:
-      <<: *airflow-environment
-      # Official image entrypoint creates this account if it does not exist.
-      # Database migration has already completed in airflow-init.
-      _AIRFLOW_WWW_USER_CREATE: "true"
-      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-airflow}
-      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?Run python airflow/setup_local.py}
-      _AIRFLOW_WWW_USER_FIRSTNAME: Airflow
-      _AIRFLOW_WWW_USER_LASTNAME: Admin
-      _AIRFLOW_WWW_USER_EMAIL: airflow@localhost.local
-      _AIRFLOW_WWW_USER_ROLE: Admin
-    command: ["api-server"]
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8081:8080"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v2/monitor/health', timeout=5)"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-
-  airflow-scheduler:
-    <<: *airflow-common
-    environment:
-      <<: *airflow-environment
-      # Only the execution service needs these credentials. The training
-      # operator passes them privately to its child container at runtime.
-      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow}
-      MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-}
-      MLFLOW_TRACKING_PASSWORD: ${DAGSHUB_TOKEN:-}
-      PREDICT_SMOKE_TOKEN: ${PREDICT_SMOKE_TOKEN:-alice-token}
-    # LocalExecutor runs DockerOperator here. Group 0 matches the socket on
-    # Docker Desktop; override AIRFLOW_DOCKER_GID for a different Linux host.
-    group_add:
-      - "${AIRFLOW_DOCKER_GID:-0}"
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags:ro
-      - airflow_logs:/opt/airflow/logs
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Compose inside Scheduler must use the same absolute path as the daemon.
-      # Write access is used only to persist the selected version in root .env.
-      - .:${AIRFLOW_DOCKER_PROJECT_DIR:?Run python airflow/setup_local.py}
-    command: ["scheduler"]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$$HOSTNAME\""]
-      interval: 20s
-      timeout: 15s
-      retries: 5
-      start_period: 60s
-
-  airflow-dag-processor:
-    <<: *airflow-common
-    command: ["dag-processor"]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "airflow jobs check --job-type DagProcessorJob --hostname \"$$HOSTNAME\""]
-      interval: 20s
-      timeout: 15s
-      retries: 5
-      start_period: 60s
 
 volumes:
   prometheus_data:
   grafana_data:
-  airflow_logs:
-
-  # Reuse the database volume created during the initial Airflow setup.
-  # External ownership prevents Compose down -v from removing this database.
-  airflow_postgres_data:
-    external: true
-    name: movie-reco-airflow-postgres-data

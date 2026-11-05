@@ -8,7 +8,7 @@ server, scheduler and DAG processor only after initialization exits successfully
 Existing database contents and run history are preserved. No separate init
 command is required for normal startup.
 
-With the root `.env` configured and the external database volume already created,
+With the root `.env` configured,
 run from the repository root in PowerShell:
 
 ```powershell
@@ -22,9 +22,9 @@ Starting these services does not trigger training; run `training_pipeline`
 manually from the dashboard. If initialization fails, inspect
 `docker compose logs airflow-init`; new Airflow runtime services remain blocked.
 Use Compose `up` for this dependency ordering; `restart` does not replay it.
-For a new machine without local settings/volume, follow the setup sections below.
+For a new machine without local settings, follow the setup sections below.
 
-All services live in the main `docker-compose.yml`, using a local image based on Airflow 3.3.2 and
+The main `docker-compose.yml` includes `compose.airflow.yml`, which uses a local image based on Airflow 3.3.2 and
 PostgreSQL 16. The API server provides the dashboard, the scheduler coordinates
 work with LocalExecutor, and the DAG processor parses files in `airflow/dags`.
 There is no Redis or separate Celery worker. A manual infrastructure smoke-test DAG is included; the training pipeline prepares data, registers KNN and deploys/verifies its exact version.
@@ -32,18 +32,12 @@ There is no Redis or separate Celery worker. A manual infrastructure smoke-test 
 ## Local settings
 
 Compose reads `.env` in the repository root, including the existing required
-DagsHub and Grafana variables. Set these database settings there:
+DagsHub and Grafana variables. The database user and name both default to
+`airflow` and can be overridden in `.env`.
 
-```dotenv
-AIRFLOW_POSTGRES_USER=airflow
-AIRFLOW_POSTGRES_DB=airflow
-AIRFLOW_POSTGRES_PASSWORD=your-random-hexadecimal-password
-```
-
-Run the setup helper; it generates missing encryption/signing keys in `.env` and
-dashboard credentials in the same root `.env` file, which is ignored by Git.
-Existing nonempty settings are preserved; no separate password directory or
-JSON file is created.
+Run the setup helper to fill in missing encryption and signing keys, dashboard
+credentials, and a hexadecimal PostgreSQL password in the root `.env` file.
+Git ignores this file. The helper preserves existing nonempty values.
 
 ```powershell
 python airflow/setup_local.py
@@ -74,7 +68,6 @@ is bound to the local machine only: http://localhost:8081.
 Run from the repository root:
 
 ```powershell
-docker volume create movie-reco-airflow-postgres-data
 docker compose config --quiet
 docker compose up -d --build --wait airflow-api-server airflow-scheduler airflow-dag-processor
 # Optional read-only database diagnostics:
@@ -83,11 +76,11 @@ docker compose run --rm airflow-init db check-migrations --migration-wait-timeou
 ```
 
 The database hostname inside Docker is `airflow-postgres`, port 5432; no database
-port is published to Windows. The named external volume
-`movie-reco-airflow-postgres-data` persists the database and is not deleted by
-Compose down, even with `-v`. On a fresh machine the volume-create command is
-required. PostgreSQL user/password/database settings initialize an empty volume
-only; modifying `.env` does not change existing users or their passwords.
+port is published to Windows. Compose creates a database volume for each project.
+The default project uses `movie-reco-airflow-postgres-data`. Ordinary
+`docker compose down` preserves the database. Avoid `docker compose down -v`
+when you want to keep it. PostgreSQL user, password, and database settings
+initialize an empty volume. Changing `.env` does not update existing accounts.
 
 ## Start and verify the dashboard infrastructure
 
@@ -233,8 +226,7 @@ verify the daemon-side path. Rebuild the preparation image after changes to its
 code, Dockerfile or requirements; the DockerOperator does not build it for you.
 
 Fresh database setup also uses the automatic Compose startup gate described
-above. There is no separate mandatory init command. The external PostgreSQL
-volume must still be created once on a new machine.
+above. Compose creates the PostgreSQL volume and runs migrations.
 
 ### MLflow credentials and training failure checks
 
@@ -298,8 +290,19 @@ is writable because the task updates only the three serving-selection keys in
 The API and DAG processor do not get this project-root mount or Docker socket.
 Temporary `.env.rollout-*` files are excluded from Git and Docker build context.
 
-`PREDICT_SMOKE_TOKEN` in `.env` selects a valid existing predict API account token
-(default `alice-token`, the project's demo account). The check selects an existing
+`PREDICT_SMOKE_USERNAME` and `PREDICT_SMOKE_PASSWORD` in the root `.env` select
+an existing API account (for the demo account: `alice` / `alice123`). The task
+obtains a fresh JWT from `/token` for each deployment. Set the shared
+`AUTH_SECRET_KEY` as well; it is passed to the temporary candidate so the same
+JWT is valid there. Rebuild predict after authentication changes and recreate
+the scheduler after changing these settings:
+
+```powershell
+docker compose build predict
+docker compose up -d --wait predict nginx airflow-scheduler
+```
+
+Old `PREDICT_SMOKE_TOKEN` settings are no longer used. The check selects an existing
 user ID from the processed user matrix and expects ten distinct movie IDs. This
 is a functional serving check, not a recommendation-quality evaluation.
 
@@ -313,12 +316,87 @@ running. Retain the previous local image and registered model for rollback.
 To check the active selection from PowerShell after a successful run:
 
 ```powershell
-Invoke-RestMethod http://localhost:8000/model -Headers @{Authorization="Bearer alice-token"}
+$login = Invoke-RestMethod -Method Post http://localhost:8000/token -Body @{username="alice"; password="alice123"}
+Invoke-RestMethod http://localhost:8000/model -Headers @{Authorization="Bearer $($login.access_token)"}
 ```
 
-Use your configured API token if changed. The returned model URI must match the
+Use your actual API username/password if changed; obtain a new JWT after expiry. The returned model URI must match the
 training result. Also check `docker compose ps predict` for three healthy replicas.
 Updating `.env` serving selection does not change API login credentials.
+
+## JWT authentication for deployment verification
+
+The API authentication changed from fixed demo tokens to OAuth2 password login
+and signed JWTs. Airflow's deployment helper now calls `POST /token` against a
+running prediction replica at task execution, masks the returned JWT and password
+in Airflow logs, and uses the JWT for baseline, candidate, replica and Nginx checks.
+No token is stored in the DAG or persisted in `.env`. Training and data preparation
+are unchanged.
+
+The scheduler receives the API login credentials and shared `AUTH_SECRET_KEY`
+through Compose. The temporary preflight container receives that same signing key;
+otherwise a JWT issued by the running service would be rejected by the candidate.
+The existing replicas must already use the same key and have the selected user.
+JWTs expire after 30 minutes; each new deployment task requests a fresh token.
+The task does not refresh a token during a single rollout.
+
+### Configure and run an end-to-end check
+
+1. In the repository root `.env`, set an existing prediction API account:
+
+```dotenv
+PREDICT_SMOKE_USERNAME=alice
+PREDICT_SMOKE_PASSWORD=alice123
+AUTH_SECRET_KEY=<your-existing-shared-key>
+```
+
+These are demo login values, not DagsHub credentials. Use your actual password
+if customized. Preserve the existing signing key; do not paste the placeholder.
+An obsolete `PREDICT_SMOKE_TOKEN` entry may be removed. Keep `.env` out of Git.
+
+2. From the repository root, build the prediction image and apply configuration:
+
+```powershell
+docker compose config --quiet
+docker compose build predict
+docker compose up -d --wait predict nginx airflow-scheduler
+```
+
+3. In http://localhost:8081, trigger `training_pipeline`. Expect
+`prepare_features`, `train_knn`, and `deploy_predict` all to succeed. This test
+creates a new registered model version and deploys it; it is not read-only.
+4. Run `docker compose ps predict`; expect three healthy replicas.
+5. Open http://localhost:8000/docs, select **Authorize**, enter the API username
+and password, then choose **Authorize** and **Close**. Swagger calls `/token`
+for you. Reauthorize after expiry; never enter `alice-token`.
+6. Execute **GET /model** using **Try it out -> Execute**. Expect HTTP 200 and a
+`model_uri` matching the exact version printed in the training task log.
+7. Select an actual recommendation profile ID:
+
+```powershell
+Import-Csv data/processed/user_matrix.csv | Select-Object -First 5 userId
+```
+
+8. Execute **POST /predict** with `{"user_ids": [4], "seed": 42}` only if profile
+4 exists; otherwise substitute one of the printed IDs. Expect HTTP 200 with
+one recommendation row containing that user ID and ten distinct movie IDs.
+The API login account and the numeric recommendation profile are independent.
+
+### Diagnose failures
+
+- Missing deployment settings: set the three `.env` values above and recreate
+  `airflow-scheduler`; restarting alone does not reload Compose environment values.
+- Login returns 401: verify the API username/password and the user records in the
+  prediction image. Training can succeed while deployment login fails.
+- Login works but candidate checks fail with 401: verify that the scheduler,
+  candidate and all live replicas use the same `AUTH_SECRET_KEY`, and rebuild
+  the candidate image if authentication code or user records changed.
+- Swagger returns 401: log out and authorize again to obtain a fresh JWT.
+- Prediction returns 404 with `Unknown user ids`: select a profile from the
+  current matrix; this is distinct from an authentication error.
+
+For the equivalent PowerShell API requests, see
+[manual prediction verification](../src/predict_service/README.md#manual-verification-after-airflow-deployment-powershell--swagger).
 
 ## Manual failure test: preparation blocks downstream tasks
 
@@ -356,11 +434,11 @@ deploy_predict   -> upstream_failed
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/model -Headers @{
-    Authorization = "Bearer alice-token"
+    Authorization = "Bearer $($login.access_token)"
 }
 ```
 
-Use your configured API token if different. This validation error happens
+Obtain a fresh JWT using the login command above if the previous token expired. This validation error happens
 before processed CSVs are replaced, so existing outputs remain unchanged.
 
 7. Restore `split.current_part` to its original value immediately after the
@@ -373,7 +451,7 @@ This is a manual fault-injection check; it does not require a pytest file.
 
 ## Verify automatic startup ordering
 
-Run from the repository root after local `.env` setup and external volume creation:
+Run from the repository root after local `.env` setup:
 
 ```powershell
 docker compose up -d --build --wait airflow-api-server airflow-scheduler airflow-dag-processor
