@@ -32,18 +32,12 @@ There is no Redis or separate Celery worker. A manual infrastructure smoke-test 
 ## Local settings
 
 Compose reads `.env` in the repository root, including the existing required
-DagsHub and Grafana variables. Set these database settings there:
+DagsHub and Grafana variables. The database user and name both default to
+`airflow` and can be overridden in `.env`.
 
-```dotenv
-AIRFLOW_POSTGRES_USER=airflow
-AIRFLOW_POSTGRES_DB=airflow
-AIRFLOW_POSTGRES_PASSWORD=your-random-hexadecimal-password
-```
-
-Run the setup helper; it generates missing encryption/signing keys in `.env` and
-dashboard credentials in the same root `.env` file, which is ignored by Git.
-Existing nonempty settings are preserved; no separate password directory or
-JSON file is created.
+Run the setup helper to fill in missing encryption and signing keys, dashboard
+credentials, and a hexadecimal PostgreSQL password in the root `.env` file.
+Git ignores this file. The helper preserves existing nonempty values.
 
 ```powershell
 python airflow/setup_local.py
