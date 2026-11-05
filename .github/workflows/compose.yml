@@ -84,8 +84,8 @@ jobs:
       - name: Register disposable KNN model
         run: docker compose run --rm train
 
-      - name: Start all services using built images
-        run: docker compose up -d --no-build --wait --wait-timeout 120
+      - name: Start prediction stack
+        run: docker compose up -d --no-build --wait --wait-timeout 120 nginx
 
       - name: Test versioned registry loading
         run: |
