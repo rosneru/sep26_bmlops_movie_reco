@@ -117,10 +117,9 @@ setup, expected brief interruption, verification and rollback limitations.
    creating another version, skip this step.
 2. Run `docker compose ps predict`; expect three healthy replicas.
 3. Open http://localhost:8000/docs and click **Authorize**.
-4. Under **HTTPBearer**, enter exactly `alice-token` (without a `Bearer` prefix),
-   then click its **Authorize** button and **Close**. HTTPBasic can remain empty.
-   This is a demo predict API token from `src/user_authentication_service/auth.py`,
-   not a DagsHub token. Use your own API credentials if these have been changed.
+4. In **Authorize**, sign in using the OAuth2 username/password fields
+   (demo account: `alice` / `alice123`). The API issues a JWT valid for 30 minutes.
+   This login is separate from DagsHub credentials.
 5. Find valid recommendation profile IDs in the current processed data:
 
 ```powershell
@@ -148,8 +147,7 @@ Import-Csv data/processed/user_matrix.csv |
 Troubleshooting:
 
 - HTTP `401`, `Invalid or missing credentials`: authorize again and re-execute.
-  The generated Curl must contain `Authorization: Bearer alice-token` (or your
-  configured API token). The Swagger **Authorized** label alone does not prove
+  The generated Curl must contain `Authorization: Bearer <JWT returned by /token>` (a JWT obtained from `/token`). The Swagger **Authorized** label alone does not prove
   the credential is valid; the API response does.
 - HTTP `404`, `Unknown user ids`: authentication passed, but the requested user
   profiles are absent from the loaded user matrix. IDs `1`, `2`, `3` are examples,
@@ -163,7 +161,8 @@ Troubleshooting:
 Equivalent direct request from PowerShell:
 
 ```powershell
-$headers = @{ Authorization = "Bearer alice-token" }
+$login = Invoke-RestMethod -Method Post http://localhost:8000/token -Body @{username="alice"; password="alice123"}
+$headers = @{ Authorization = "Bearer $($login.access_token)" }
 $userId = [int](Import-Csv data/processed/user_matrix.csv |
     Select-Object -First 1).userId
 $body = @{ user_ids = @($userId); seed = 42 } | ConvertTo-Json
@@ -172,3 +171,6 @@ Invoke-RestMethod http://localhost:8000/predict `
     ConvertTo-Json -Depth 5
 Invoke-RestMethod http://localhost:8000/model -Headers $headers
 ```
+
+For Airflow JWT configuration, rollout behavior and end-to-end testing, see
+[the deployment authentication guide](../../airflow/README.md#jwt-authentication-for-deployment-verification).
