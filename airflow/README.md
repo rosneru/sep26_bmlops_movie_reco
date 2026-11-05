@@ -298,8 +298,19 @@ is writable because the task updates only the three serving-selection keys in
 The API and DAG processor do not get this project-root mount or Docker socket.
 Temporary `.env.rollout-*` files are excluded from Git and Docker build context.
 
-`PREDICT_SMOKE_TOKEN` in `.env` selects a valid existing predict API account token
-(default `alice-token`, the project's demo account). The check selects an existing
+`PREDICT_SMOKE_USERNAME` and `PREDICT_SMOKE_PASSWORD` in the root `.env` select
+an existing API account (for the demo account: `alice` / `alice123`). The task
+obtains a fresh JWT from `/token` for each deployment. Set the shared
+`AUTH_SECRET_KEY` as well; it is passed to the temporary candidate so the same
+JWT is valid there. Rebuild predict after authentication changes and recreate
+the scheduler after changing these settings:
+
+```powershell
+docker compose build predict
+docker compose up -d --wait predict nginx airflow-scheduler
+```
+
+Old `PREDICT_SMOKE_TOKEN` settings are no longer used. The check selects an existing
 user ID from the processed user matrix and expects ten distinct movie IDs. This
 is a functional serving check, not a recommendation-quality evaluation.
 
@@ -313,12 +324,87 @@ running. Retain the previous local image and registered model for rollback.
 To check the active selection from PowerShell after a successful run:
 
 ```powershell
-Invoke-RestMethod http://localhost:8000/model -Headers @{Authorization="Bearer alice-token"}
+$login = Invoke-RestMethod -Method Post http://localhost:8000/token -Body @{username="alice"; password="alice123"}
+Invoke-RestMethod http://localhost:8000/model -Headers @{Authorization="Bearer $($login.access_token)"}
 ```
 
-Use your configured API token if changed. The returned model URI must match the
+Use your actual API username/password if changed; obtain a new JWT after expiry. The returned model URI must match the
 training result. Also check `docker compose ps predict` for three healthy replicas.
 Updating `.env` serving selection does not change API login credentials.
+
+## JWT authentication for deployment verification
+
+The API authentication changed from fixed demo tokens to OAuth2 password login
+and signed JWTs. Airflow's deployment helper now calls `POST /token` against a
+running prediction replica at task execution, masks the returned JWT and password
+in Airflow logs, and uses the JWT for baseline, candidate, replica and Nginx checks.
+No token is stored in the DAG or persisted in `.env`. Training and data preparation
+are unchanged.
+
+The scheduler receives the API login credentials and shared `AUTH_SECRET_KEY`
+through Compose. The temporary preflight container receives that same signing key;
+otherwise a JWT issued by the running service would be rejected by the candidate.
+The existing replicas must already use the same key and have the selected user.
+JWTs expire after 30 minutes; each new deployment task requests a fresh token.
+The task does not refresh a token during a single rollout.
+
+### Configure and run an end-to-end check
+
+1. In the repository root `.env`, set an existing prediction API account:
+
+```dotenv
+PREDICT_SMOKE_USERNAME=alice
+PREDICT_SMOKE_PASSWORD=alice123
+AUTH_SECRET_KEY=<your-existing-shared-key>
+```
+
+These are demo login values, not DagsHub credentials. Use your actual password
+if customized. Preserve the existing signing key; do not paste the placeholder.
+An obsolete `PREDICT_SMOKE_TOKEN` entry may be removed. Keep `.env` out of Git.
+
+2. From the repository root, build the prediction image and apply configuration:
+
+```powershell
+docker compose config --quiet
+docker compose build predict
+docker compose up -d --wait predict nginx airflow-scheduler
+```
+
+3. In http://localhost:8081, trigger `training_pipeline`. Expect
+`prepare_features`, `train_knn`, and `deploy_predict` all to succeed. This test
+creates a new registered model version and deploys it; it is not read-only.
+4. Run `docker compose ps predict`; expect three healthy replicas.
+5. Open http://localhost:8000/docs, select **Authorize**, enter the API username
+and password, then choose **Authorize** and **Close**. Swagger calls `/token`
+for you. Reauthorize after expiry; never enter `alice-token`.
+6. Execute **GET /model** using **Try it out -> Execute**. Expect HTTP 200 and a
+`model_uri` matching the exact version printed in the training task log.
+7. Select an actual recommendation profile ID:
+
+```powershell
+Import-Csv data/processed/user_matrix.csv | Select-Object -First 5 userId
+```
+
+8. Execute **POST /predict** with `{"user_ids": [4], "seed": 42}` only if profile
+4 exists; otherwise substitute one of the printed IDs. Expect HTTP 200 with
+one recommendation row containing that user ID and ten distinct movie IDs.
+The API login account and the numeric recommendation profile are independent.
+
+### Diagnose failures
+
+- Missing deployment settings: set the three `.env` values above and recreate
+  `airflow-scheduler`; restarting alone does not reload Compose environment values.
+- Login returns 401: verify the API username/password and the user records in the
+  prediction image. Training can succeed while deployment login fails.
+- Login works but candidate checks fail with 401: verify that the scheduler,
+  candidate and all live replicas use the same `AUTH_SECRET_KEY`, and rebuild
+  the candidate image if authentication code or user records changed.
+- Swagger returns 401: log out and authorize again to obtain a fresh JWT.
+- Prediction returns 404 with `Unknown user ids`: select a profile from the
+  current matrix; this is distinct from an authentication error.
+
+For the equivalent PowerShell API requests, see
+[manual prediction verification](../src/predict_service/README.md#manual-verification-after-airflow-deployment-powershell--swagger).
 
 ## Manual failure test: preparation blocks downstream tasks
 
@@ -356,11 +442,11 @@ deploy_predict   -> upstream_failed
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/model -Headers @{
-    Authorization = "Bearer alice-token"
+    Authorization = "Bearer $($login.access_token)"
 }
 ```
 
-Use your configured API token if different. This validation error happens
+Obtain a fresh JWT using the login command above if the previous token expired. This validation error happens
 before processed CSVs are replaced, so existing outputs remain unchanged.
 
 7. Restore `split.current_part` to its original value immediately after the

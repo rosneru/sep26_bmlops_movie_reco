@@ -213,7 +213,9 @@ services:
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow}
       MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-}
       MLFLOW_TRACKING_PASSWORD: ${DAGSHUB_TOKEN:-}
-      PREDICT_SMOKE_TOKEN: ${PREDICT_SMOKE_TOKEN:-alice-token}
+      PREDICT_SMOKE_USERNAME: ${PREDICT_SMOKE_USERNAME:-alice}
+      PREDICT_SMOKE_PASSWORD: ${PREDICT_SMOKE_PASSWORD:-}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:?Set AUTH_SECRET_KEY in the root .env file or your shell}
     # LocalExecutor runs DockerOperator here. Group 0 matches the socket on
     # Docker Desktop; override AIRFLOW_DOCKER_GID for a different Linux host.
     group_add:

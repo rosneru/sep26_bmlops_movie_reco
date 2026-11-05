@@ -39,6 +39,23 @@ def _url(container, network):
     return f'http://{address}:8000'
 
 
+def _login(url, username, password):
+    """Obtain a fresh JWT without exposing credentials in task logs."""
+    from airflow.sdk.log import mask_secret
+
+    response = requests.post(
+        url + '/token',
+        data={'username': username, 'password': password},
+        timeout=10,
+    )
+    response.raise_for_status()
+    token = response.json()['access_token']
+    if not isinstance(token, str) or not token.strip():
+        raise ValueError('Login did not return a valid access token')
+    mask_secret(token)
+    return {'Authorization': 'Bearer ' + token}
+
+
 def _smoke(url, headers, model, user_id, timeout=120):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -165,10 +182,17 @@ def deploy_prediction(training_result):
     name, version = training_result['model_name'], str(training_result['model_version'])
     if name != 'movie-genre-knn' or not version.isdecimal() or int(version) < 1:
         raise ValueError('Expected a specific registered KNN version from training')
-    token = os.environ.get('PREDICT_SMOKE_TOKEN', 'alice-token')
-    mask_secret(token)
+    username = os.environ.get('PREDICT_SMOKE_USERNAME', '')
+    password = os.environ.get('PREDICT_SMOKE_PASSWORD', '')
+    secret = os.environ.get('AUTH_SECRET_KEY', '')
+    if not all(value.strip() for value in (username, password, secret)):
+        raise ValueError(
+            'Set PREDICT_SMOKE_USERNAME, PREDICT_SMOKE_PASSWORD and '
+            'AUTH_SECRET_KEY in .env, then recreate airflow-scheduler'
+        )
+    mask_secret(password)
+    mask_secret(secret)
     mask_secret(os.environ['MLFLOW_TRACKING_PASSWORD'])
-    headers = {'Authorization': 'Bearer ' + token}
     with (root / 'data/processed/user_matrix.csv').open() as stream:
         user_id = int(next(csv.DictReader(stream))['userId'])
     expected = {'model_uri': f'models:/{name}/{version}', 'model_type': 'knn'}
@@ -180,6 +204,7 @@ def deploy_prediction(training_result):
                 'Start exactly three healthy predict replicas before deployment'
             )
         network = next(iter(existing[0].attrs['NetworkSettings']['Networks']))
+        headers = _login(_url(existing[0], network), username, password)
         baseline = []
         for container in existing:
             if container.attrs['State'].get('Health', {}).get('Status') != 'healthy':
@@ -217,6 +242,7 @@ def deploy_prediction(training_result):
             )
         }
         environment.update(
+            AUTH_SECRET_KEY=secret,
             PREDICT_MODEL_TYPE='knn',
             PREDICT_MODEL_NAME=name,
             PREDICT_MODEL_VERSION=version,
