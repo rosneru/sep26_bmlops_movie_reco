@@ -34,7 +34,7 @@ jobs:
       DAGSHUB_S3_ENDPOINT_URL: https://example.invalid
       DAGSHUB_BUCKET: ci-dummy-bucket
       DAGSHUB_TOKEN: ci-dummy-token
-
+      AUTH_SECRET_KEY: ci-dummy-secret
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -92,10 +92,15 @@ jobs:
 
       - name: Test prediction through Nginx
         run: |
+          TOKEN=$(curl --fail-with-body --show-error --silent \
+            --connect-timeout 5 \
+            --max-time 30 \
+            -X POST http://localhost:8000/token \
+            -d 'username=alice&password=alice123' | jq -r .access_token)
           curl --fail-with-body --show-error --silent \
             --connect-timeout 5 \
             --max-time 30 \
-            -u alice:alice123 \
+            -H "Authorization: Bearer $TOKEN" \
             -X POST http://localhost:8000/predict \
             -H 'Content-Type: application/json' \
             -d '{"user_ids":[1],"seed":42}'

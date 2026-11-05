@@ -1,0 +1,14 @@
+{
+  "admin": {
+    "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$nUCiXEpXcR2oTw60mYcqIA$5pNHJaATTQrYtR70yaQUoETD8Aq+blvwXZbZZaPruEs",
+    "role": "admin"
+  },
+  "alice": {
+    "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$jtpnA7WIM7drvIA1x0zRAw$94ew28O0SF2EpYv4/tDtEKd1A80ue3Ac/q2Q86Ow29Y",
+    "role": "user"
+  },
+  "bob": {
+    "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$PNGv0GTKWalyS9cfmGFqug$WN5TKEN/Z8YdiOSiV8qssVIewAQ/1iWum0w3Sh8/yXQ",
+    "role": "user"
+  }
+}
