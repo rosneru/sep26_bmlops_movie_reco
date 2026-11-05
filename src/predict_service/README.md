@@ -32,9 +32,11 @@ Then:
 ```bash
 docker compose build predict
 docker compose up -d predict nginx
-curl -u alice:alice123 http://localhost:8000/model
-curl -u alice:alice123 -H 'Content-Type: application/json' \
-  -d '{"user_ids":[1],"seed":42}' http://localhost:8000/predict
+TOKEN=$(curl -s -X POST localhost:8000/token -d 'username=alice&password=alice123' \
+  | python -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/model
+curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"user_ids":[21525],"seed":42}' http://localhost:8000/predict
 ```
 
 Use an ID from your actual user_matrix.csv. The processed data directory is mounted

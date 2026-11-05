@@ -1,51 +1,80 @@
-import secrets
+import json
+import os
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import (
-    HTTPAuthorizationCredentials,
-    HTTPBasic,
-    HTTPBasicCredentials,
-    HTTPBearer,
-)
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pwdlib import PasswordHash
 
 ADMIN = 'admin'
 USER = 'user'
 
-# Demo users for the training project. Each one can log in either with
-# username and password (Basic) or with the token (Bearer).
-USERS = {
-    'admin': {'password': 'admin123', 'token': 'admin-token', 'role': ADMIN},
-    'alice': {'password': 'alice123', 'token': 'alice-token', 'role': USER},
-    'bob': {'password': 'bob123', 'token': 'bob-token', 'role': USER},
-}
+# Shared by all services and replicas, so a token from one is valid in all.
+# The fallback is only for local runs and tests.
+SECRET_KEY = (
+    os.environ.get('AUTH_SECRET_KEY')
+    or 'dev-only-insecure-key-do-not-use-in-production'
+)
+ALGORITHM = 'HS256'
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# auto_error=False: a missing header is not an error yet, because the client
-# may have sent the other scheme
-basic_scheme = HTTPBasic(auto_error=False)
-bearer_scheme = HTTPBearer(auto_error=False)
+# The real users are in users.json, which is not in Git. Without it (e.g. in
+# CI or the tests) the committed demo users from users.example.json are used.
+HERE = Path(__file__).parent
+USERS_FILE = Path(os.environ.get('AUTH_USERS_FILE', HERE / 'users.json'))
+if not USERS_FILE.exists():
+    print(f'{USERS_FILE} not found, using the demo users')
+    USERS_FILE = HERE / 'users.example.json'
+
+with open(USERS_FILE) as f:
+    USERS = json.load(f)
+
+password_hash = PasswordHash.recommended()
+
+# Used for unknown usernames, so they take about as long as a wrong password
+DUMMY_HASH = password_hash.hash('dummy-password')
+
+# tokenUrl tells the /docs "Authorize" button where to log in
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl='token')
+router = APIRouter(tags=['auth'])
+
+CREDENTIALS_ERROR = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail='Invalid or missing credentials',
+    headers={'WWW-Authenticate': 'Bearer'},
+)
 
 
-def get_current_user(
-    basic: HTTPBasicCredentials | None = Depends(basic_scheme),
-    bearer: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> dict:
-    """Returns the user that sent valid Basic or Bearer credentials."""
-    # compare_digest reduces content-dependent timing differences during
-    # comparisons; it does not make the full authentication path constant-time.
-    if basic is not None:
-        user = USERS.get(basic.username)
-        if user and secrets.compare_digest(basic.password, user['password']):
-            return {'username': basic.username, 'role': user['role']}
-    if bearer is not None:
-        for username, user in USERS.items():
-            if secrets.compare_digest(bearer.credentials, user['token']):
-                return {'username': username, 'role': user['role']}
+@router.post('/token')
+def login(form: OAuth2PasswordRequestForm = Depends()) -> dict:
+    """Exchanges username and password for an expiring access token."""
+    user = USERS.get(form.username)
+    stored_hash = user['password_hash'] if user else DUMMY_HASH
+    if not password_hash.verify(form.password, stored_hash) or user is None:
+        raise CREDENTIALS_ERROR
 
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail='Invalid or missing credentials',
-        headers={'WWW-Authenticate': 'Basic, Bearer'},
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = jwt.encode(
+        {'sub': form.username, 'exp': expire}, SECRET_KEY, algorithm=ALGORITHM
     )
+    return {'access_token': token, 'token_type': 'bearer'}
+
+
+def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
+    """Returns the user of a valid, unexpired access token."""
+    try:
+        # decode also checks the signature and the 'exp' expiry time
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except jwt.InvalidTokenError:
+        raise CREDENTIALS_ERROR
+    # Look the user up again, so a removed user's tokens stop working
+    username = payload.get('sub')
+    user = USERS.get(username)
+    if user is None:
+        raise CREDENTIALS_ERROR
+    return {'username': username, 'role': user['role']}
 
 
 def require_role(*roles: str):

@@ -6,6 +6,9 @@
 .env:
 	@echo 'Missing .env: run "cp .env.example .env" and fill in the values.'
 	@exit 1
+# Logs in at /token and gives the access token: $(call token,PORT,USER,PASSWORD)
+token = $$(curl -s -X POST localhost:$(1)/token -d 'username=$(2)&password=$(3)' \
+	| python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
 
 # Start the data collection service API,
 # just for testing/debugging
@@ -16,19 +19,19 @@ run-dcs: .env src/data_collection_service/Dockerfile
 # Test the data collection service
 # Requests the data up to part 2
 test-dcs-part:
-	curl -i -X POST localhost:8001/ingest -u admin:admin123 \
+	curl -i -X POST localhost:8001/ingest -H "Authorization: Bearer $(call token,8001,admin,admin123)" \
      -H 'Content-Type: application/json' \
      -d '{"requested_up_to": 2}'
 
 # Without body
 # Requests the data up to current_part from params.yaml
 test-dcs-no-body:
-	curl -i -X POST localhost:8001/ingest -u admin:admin123
+	curl -i -X POST localhost:8001/ingest -H "Authorization: Bearer $(call token,8001,admin,admin123)"
 
 # Request Invalid value 0,
 # Returns 422
 test-dcs-invalid:
-	curl -i -X POST localhost:8001/ingest -u admin:admin123 \
+	curl -i -X POST localhost:8001/ingest -H "Authorization: Bearer $(call token,8001,admin,admin123)" \
      -H 'Content-Type: application/json' \
      -d '{"requested_up_to": 0}'
 
@@ -39,7 +42,7 @@ run-api-container:
 	docker run --rm -p 8000:8000 movie-reco-api
 
 test-api:
-	curl -X POST 'localhost:8000/predict' -u alice:alice123 \
+	curl -X POST 'localhost:8000/predict' -H "Authorization: Bearer $(call token,8000,alice,alice123)" \
      -H 'Content-Type: application/json' \
      -d '{"user_ids": [21525]}'
 

@@ -2,59 +2,89 @@
 
 Protects the endpoints of the project's APIs. Every request must say who sends it (authentication), and the sender's role decides which endpoints they may call (authorization).
 
-It is not a separate API, but a module (`auth.py`) that the other services import.
+It is not a separate API, but a module (`auth.py`) that the other services import. It uses the OAuth2 password flow: a user logs in once at `POST /token` and gets a signed, expiring access token (a JWT), which is then sent with every request.
 
 ## Users
 
-The demo users are defined in the `USERS` dictionary in `auth.py`. Each one can log in either with username and password (Basic) or with the token (Bearer).
+The users are stored in `users.json` next to `auth.py`, with a password **hash** (argon2) and a role. The file is not in Git. If it is missing (e.g. in CI or a fresh clone), the committed demo users from `users.example.json` are used:
 
-| User    | Password   | Token         | Role    | Access                               |
-| ------- | ---------- | ------------- | ------- | ------------------------------------ |
-| `admin` | `admin123` | `admin-token` | `admin` | all services (`/predict`, `/ingest`) |
-| `alice` | `alice123` | `alice-token` | `user`  | only `/predict`                      |
-| `bob`   | `bob123`   | `bob-token`   | `user`  | only `/predict`                      |
+| User    | Password   | Role    | Access                               |
+| ------- | ---------- | ------- | ------------------------------------ |
+| `admin` | `admin123` | `admin` | all services (`/predict`, `/ingest`) |
+| `alice` | `alice123` | `user`  | only `/predict`                      |
+| `bob`   | `bob123`   | `user`  | only `/predict`                      |
 
-## Sending credentials
+The file is read once when a service starts. The environment variable `AUTH_USERS_FILE` can point to another file.
 
-Both schemes use the HTTP header `Authorization`:
+### Adding a user
 
-| Scheme | Header                                        | curl                                       |
-| ------ | --------------------------------------------- | ------------------------------------------ |
-| Basic  | `Authorization: Basic <base64 of user:pass>`  | `-u alice:alice123`                        |
-| Bearer | `Authorization: Bearer <token>`               | `-H 'Authorization: Bearer alice-token'`   |
+1. Hash the password:
 
-Example:
+   ```bash
+   uv run python -c "from pwdlib import PasswordHash; print(PasswordHash.recommended().hash('the-password'))"
+   ```
 
-```bash
-curl -X POST localhost:8000/predict -u alice:alice123 \
-     -H 'Content-Type: application/json' \
-     -d '{"user_ids": [21525]}'
-```
+2. Add an entry to `users.json`:
 
-In the API docs (e.g. <http://localhost:8000/docs>), click *Authorize* and fill in either the HTTPBasic or the HTTPBearer box.
+   ```json
+   "carol": {"password_hash": "<the printed hash>", "role": "user"}
+   ```
+
+3. Restart the services. With Docker, rebuild them, since the file is copied into the images: `docker compose up -d --build`.
+
+## Logging in
+
+1. Get a token with username and password. Each API has its own `/token` endpoint (`localhost:8000` for prediction, `localhost:8001` for data collection), and a token from one is valid in all of them:
+
+   ```bash
+   TOKEN=$(curl -s -X POST localhost:8000/token -d 'username=alice&password=alice123' \
+     | python -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+   ```
+
+2. Send the token in the `Authorization` header:
+
+   ```bash
+   curl -X POST localhost:8000/predict -H "Authorization: Bearer $TOKEN" \
+        -H 'Content-Type: application/json' \
+        -d '{"user_ids": [21525]}'
+   ```
+
+The token expires after 30 minutes (`ACCESS_TOKEN_EXPIRE_MINUTES`). Then log in again.
+
+In the API docs (e.g. <http://localhost:8000/docs>), click *Authorize* and enter username and password. The page then gets and sends the token itself.
 
 ## Responses
 
-| Code  | Meaning                                         | Example                                   |
-| ----- | ----------------------------------------------- | ----------------------------------------- |
-| `200` | Authenticated and allowed                       | `alice` calls `/predict`                  |
-| `401` | Not authenticated: missing or wrong credentials | no header, wrong password, unknown token  |
-| `403` | Authenticated, but the role is not allowed      | `alice` calls `/ingest`                   |
+| Code  | Meaning                                    | Example                                                       |
+| ----- | ------------------------------------------ | ------------------------------------------------------------- |
+| `200` | Authenticated and allowed                  | `alice` calls `/predict` with a valid token                   |
+| `401` | Not authenticated                          | wrong password at `/token`; missing, invalid or expired token |
+| `403` | Authenticated, but the role is not allowed | `alice` calls `/ingest`                                       |
 
-The `401` message does not say whether the username or the password was wrong, so it gives no hint which usernames exist.
+A failed login does not say whether the username or the password was wrong, so it gives no hint which usernames exist. Unknown usernames are checked against a dummy hash, so they take about as long as a wrong password.
 
 ## How it works
 
-A request passes these steps before the endpoint runs:
+Logging in, once:
 
 ```
-request ──► HTTPBasic / HTTPBearer ──► get_current_user ──► require_role ──► endpoint
-            read the header             who is it? (401)      allowed? (403)
+POST /token (username, password) ──► login: verify the password hash ──► signed JWT {"sub": user, "exp": ...}
 ```
 
-1. **`basic_scheme` and `bearer_scheme`** (FastAPI's `HTTPBasic` and `HTTPBearer`) read the `Authorization` header. They use `auto_error=False`, so a missing header gives `None` instead of an immediate `401`. Otherwise a Bearer request would be rejected by the Basic scheme before its token is checked.
-2. **`get_current_user`** looks up the Basic username and compares the password, or searches the user whose token matches. It returns `{'username': ..., 'role': ...}` or raises `401`. The comparison uses `secrets.compare_digest` to reduce timing differences caused by matching credential contents. **It does not make the entire authentication operation constant-time:** unknown usernames take a different lookup path, tokens are checked against users in a loop, and input length or other operations may affect response timing. It is one defense against timing attacks, not a guarantee of timing-attack resistance.
-3. **`require_role(*roles)`** creates a dependency that first runs `get_current_user` and then raises `403` if the role is not in `roles`.
+Every protected request:
+
+```
+request ──► oauth2_scheme ──► get_current_user ──► require_role ──► endpoint
+            read the Bearer     check signature,      allowed? (403)
+            token (401)         expiry, user (401)
+```
+
+1. **`login`** (`POST /token`) looks up the user, verifies the password against the stored hash and returns a JWT signed with `AUTH_SECRET_KEY` (HS256). The token contains only the username (`sub`) and the expiry time (`exp`). It is signed, not encrypted, so it holds no secrets.
+2. **`oauth2_scheme`** (FastAPI's `OAuth2PasswordBearer`) reads the token from the `Authorization: Bearer ...` header. Without the header, FastAPI answers `401 Not authenticated`.
+3. **`get_current_user`** checks the signature and the expiry, then looks the user up in `USERS` again, so deleted users lose access and role changes apply at once. It returns `{'username': ..., 'role': ...}` or raises `401`.
+4. **`require_role(*roles)`** creates a dependency that first runs `get_current_user` and then raises `403` if the role is not in `roles`.
+
+The server stores no tokens. Any service with the same `AUTH_SECRET_KEY` can check a token, which is why all predict replicas behind nginx accept the same token. nginx itself only forwards the requests and does not check anything.
 
 The ready-made rules are:
 
@@ -65,14 +95,29 @@ require_predict_access = require_role(ADMIN, USER)  # admin and users
 
 If a check fails, the endpoint code never runs. For example, a user calling `/ingest` uploads nothing.
 
+## Configuration
+
+| Variable          | Purpose                                             | Default                                 |
+| ----------------- | --------------------------------------------------- | --------------------------------------- |
+| `AUTH_SECRET_KEY` | Signs the tokens; must be the same for all services | an insecure key, only for local runs    |
+| `AUTH_USERS_FILE` | Path of the users file                              | `users.json`, else `users.example.json` |
+
+Docker Compose requires `AUTH_SECRET_KEY` in the root `.env`. Generate one with:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
 ## Protecting an endpoint
 
-Add the rule to the endpoint's `dependencies`, as `src/data_collection_service/main.py` does:
+Add the `/token` endpoint to the service once, and the rule to the endpoint's `dependencies`, as `src/data_collection_service/main.py` does:
 
 ```python
 from fastapi import Depends
 
-from user_authentication_service.auth import require_admin
+from user_authentication_service.auth import require_admin, router as auth_router
+
+api.include_router(auth_router)
 
 
 @api.post('/ingest', dependencies=[Depends(require_admin)])
@@ -94,16 +139,16 @@ A service whose Docker image copies single files must also copy this module, see
 COPY src/user_authentication_service/ src/user_authentication_service/
 ```
 
-New roles are added as a constant (like `ADMIN` and `USER`), assigned in `USERS` and used in a `require_role(...)` rule.
+New roles are added as a constant (like `ADMIN` and `USER`), assigned in `users.json` and used in a `require_role(...)` rule.
 
 ## Limitations
 
 This is kept simple for the training project. A production system would:
 
-- store only password hashes (e.g. bcrypt), not plain-text passwords
-- issue expiring tokens (e.g. JWT from a `POST /token` login endpoint) instead of fixed ones
-- load the users from a database or secrets, not from the code in Git
-- serve the APIs over HTTPS only, since Basic credentials are only Base64-encoded, not encrypted
+- load the users from a database instead of a file baked into the image
+- offer a way to revoke tokens before they expire (e.g. a deny list or refresh tokens)
+- limit failed login attempts
+- serve the APIs over HTTPS only, since a stolen token works until it expires
 
 MLflow, Prometheus and Grafana are third-party tools and are not protected by this module. Grafana has its own login (see `.env`).
 
@@ -116,27 +161,21 @@ uv sync --group dev
 PYTHONPATH=src uv run pytest -q tests/auth
 ```
 
-The tests check missing and invalid Basic credentials, unknown bearer tokens, valid
-users, and the `/ingest` admin-only rule. They also exercise the real `/predict`
-route with lightweight fake ML artifacts: an **unknown login username** is rejected
-with `401`, whereas a valid account requesting an **unknown MovieLens user ID**
-is rejected with `404`. No external dataset or Docker service is required.
+The tests check logins with wrong credentials, requests without a token and with unknown or expired tokens, valid users, and the `/ingest` admin-only rule. They also exercise the real `/predict` route with a fake model loader: an **unknown login username** is rejected at `/token` with `401`, whereas a valid account requesting an **unknown MovieLens user ID** is rejected with `404`. No mlflow, external dataset or Docker service is required.
 
 ### Test an unknown user manually
 
 Run the prediction API as described in the main README, then in another shell:
 
 ```bash
-# Unknown authentication account -> HTTP 401
-curl -i -u 'nonexistent:some-password' \
-  -H 'Content-Type: application/json' \
-  -d '{"user_ids":[21525]}' http://localhost:8000/predict
+# Unknown authentication account -> HTTP 401 at login
+curl -i -X POST localhost:8000/token -d 'username=nonexistent&password=some-password'
 
 # Known account, nonexistent MovieLens profile -> HTTP 404
-curl -i -u 'alice:alice123' \
-  -H 'Content-Type: application/json' \
-  -d '{"user_ids":[999999999]}' http://localhost:8000/predict
+TOKEN=$(curl -s -X POST localhost:8000/token -d 'username=alice&password=alice123' \
+  | python -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+curl -i -X POST localhost:8000/predict -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"user_ids":[999999999]}'
 ```
 
-The second test assumes ID `999999999` does not exist in the currently loaded
-user matrix. These fixed demo credentials are **not suitable for deployment**.
+The second test assumes ID `999999999` does not exist in the currently loaded user matrix. The demo credentials are **not suitable for deployment**.

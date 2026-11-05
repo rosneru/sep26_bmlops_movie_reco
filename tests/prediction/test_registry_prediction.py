@@ -8,9 +8,11 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import jwt
 import mlflow
 import numpy as np
 import pandas as pd
@@ -19,6 +21,7 @@ from mlflow.exceptions import MlflowException
 sys.path.insert(0, '/app/src')
 from predict_service.model_loader import load_registered_model
 from src.train_service.models import knn
+from user_authentication_service.auth import ALGORITHM, SECRET_KEY
 
 
 class RegistryPredictionTests(unittest.TestCase):
@@ -160,7 +163,12 @@ class RegistryPredictionTests(unittest.TestCase):
             messages = []
             headers = [(b'content-type', b'application/json')]
             if authorized:
-                headers.append((b'authorization', b'Bearer alice-token'))
+                expire = datetime.now(timezone.utc) + timedelta(minutes=5)
+                token = jwt.encode(
+                    {'sub': 'alice', 'exp': expire}, SECRET_KEY, algorithm=ALGORITHM
+                )
+                headers.append((b'authorization', f'Bearer {token}'.encode()))
+
             scope = {
                 'type': 'http',
                 'asgi': {'version': '3.0'},
