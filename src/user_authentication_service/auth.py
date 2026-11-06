@@ -7,6 +7,10 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pwdlib import PasswordHash
+from prometheus_client import Counter
+
+# No usernames as labels: they would expose users and create too many series
+AUTH_EVENTS = Counter('auth_events_total', 'Authentication results.', ['result'])
 
 ADMIN = 'admin'
 USER = 'user'
@@ -24,6 +28,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 # CI or the tests) the committed demo users from users.example.json are used.
 HERE = Path(__file__).parent
 USERS_FILE = Path(os.environ.get('AUTH_USERS_FILE', HERE / 'users.json'))
+
 if not USERS_FILE.exists():
     print(f'{USERS_FILE} not found, using the demo users')
     USERS_FILE = HERE / 'users.example.json'
@@ -53,12 +58,14 @@ def login(form: OAuth2PasswordRequestForm = Depends()) -> dict:
     user = USERS.get(form.username)
     stored_hash = user['password_hash'] if user else DUMMY_HASH
     if not password_hash.verify(form.password, stored_hash) or user is None:
+        AUTH_EVENTS.labels('login_failed').inc()
         raise CREDENTIALS_ERROR
 
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token = jwt.encode(
         {'sub': form.username, 'exp': expire}, SECRET_KEY, algorithm=ALGORITHM
     )
+    AUTH_EVENTS.labels('login_success').inc()
     return {'access_token': token, 'token_type': 'bearer'}
 
 
@@ -68,11 +75,13 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
         # decode also checks the signature and the 'exp' expiry time
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except jwt.InvalidTokenError:
+        AUTH_EVENTS.labels('token_rejected').inc()
         raise CREDENTIALS_ERROR
     # Look the user up again, so a removed user's tokens stop working
     username = payload.get('sub')
     user = USERS.get(username)
     if user is None:
+        AUTH_EVENTS.labels('token_rejected').inc()
         raise CREDENTIALS_ERROR
     return {'username': username, 'role': user['role']}
 
@@ -82,6 +91,7 @@ def require_role(*roles: str):
 
     def check(user: dict = Depends(get_current_user)) -> dict:
         if user['role'] not in roles:
+            AUTH_EVENTS.labels('forbidden').inc()
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail='Not allowed for this user',
