@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+from prometheus_client import REGISTRY
 
 
 class FakeRecommender:
@@ -38,10 +39,12 @@ def predict_client(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, 'predict_service.model_loader', fake_loader)
 
     sys.modules.pop('predict_service.predict', None)
+    module = importlib.import_module('predict_service.predict')
     try:
-        module = importlib.import_module('predict_service.predict')
         yield TestClient(module.app)
     finally:
+        # The next test imports predict.py again, which registers the counter again
+        REGISTRY.unregister(module.PREDICTION_REQUESTS)
         sys.modules.pop('predict_service.predict', None)
 
 
