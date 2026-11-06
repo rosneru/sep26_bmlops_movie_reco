@@ -1,10 +1,11 @@
 import os
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel, Field
 
 import config
@@ -42,6 +43,12 @@ PREDICTION_HANDLER_REQUESTS = Counter(
     'prediction_handler_requests_total',
     'Number of requests that reached the prediction handler.',
 )
+
+PREDICTION_REQUEST_DURATION = Histogram(
+    'prediction_request_duration_seconds',
+    'Time spent handling POST /predict requests.',
+)
+
 
 # data model for input query
 class PredictRequest(BaseModel):
@@ -116,11 +123,14 @@ async def count_prediction_requests(request: Request, call_next):
     if request.method != 'POST' or request.url.path != '/predict':
         return await call_next(request)
 
+    started = perf_counter()
     try:
         response = await call_next(request)
     except Exception:
         PREDICTION_REQUESTS.labels(status='500').inc()
         raise
+    finally:
+        PREDICTION_REQUEST_DURATION.observe(perf_counter() - started)
 
     PREDICTION_REQUESTS.labels(status=str(response.status_code)).inc()
     return response
