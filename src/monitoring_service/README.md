@@ -14,6 +14,12 @@ The counter records each POST to `/predict` by HTTP status, including requests
 rejected during authentication. A restart resets that replica's counters. Data drift detection and alerts are outside the
 current monitoring scope.
 
+Authentication results are counted in `auth_events_total` with the label `result`:
+`login_success`, `login_failed`, `token_rejected` and `forbidden`. Only the prediction
+service is scraped, so logins on the data collection service are not included. Requests
+without any token are rejected by FastAPI before this counter runs. A restart resets the
+counters of that replica.
+
 ## Prerequisites
 
 Install Docker with Docker Compose. Prometheus and Grafana run in containers; no local Python packages are needed for these monitoring services. Starting the full application also requires the model and data described in the root README.
