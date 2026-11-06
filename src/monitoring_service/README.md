@@ -6,8 +6,12 @@ API Monitoring** dashboard from the repository.
 
 The dashboard shows prediction requests per replica since startup, the combined
 request rate over five minutes, and the number of reachable prediction replicas.
-The counter increments when a request reaches the prediction handler. A restart
-resets that replica's counter. Data drift detection and alerts are outside the
+The handler graph shows cumulative requests that reached the prediction handler
+on each replica. The status table includes authentication failures too.
+Use the status counter alone for overall traffic totals.
+
+The counter records each POST to `/predict` by HTTP status, including requests
+rejected during authentication. A restart resets that replica's counters. Data drift detection and alerts are outside the
 current monitoring scope.
 
 Authentication results are counted in `auth_events_total` with the label `result`:
@@ -91,9 +95,15 @@ loaded dataset. The script summarizes the HTTP responses. With valid credentials
 and a valid user ID, expect 30 responses with HTTP 200 and 10 with HTTP 401.
 
 After the next scrape, open **Movie Recommendation API Monitoring** in Grafana.
-The per-replica counters should increase by 30 in total. Requests rejected with
-HTTP 401 stop at authentication, before the prediction handler increments its
-counter.
+The per-replica counters should increase by 40 in total. To see the outcomes
+separately, run this query in Grafana Explore:
+
+```promql
+sum by (status) (prediction_requests_total{job="prediction",status!=""})
+```
+
+Compare the values before and after the demo. HTTP 200 should increase by 30
+and HTTP 401 by 10.
 
 ## Configuration and storage
 
