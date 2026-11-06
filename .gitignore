@@ -27,6 +27,7 @@ wheels/
 # model
 *.Python
 *.json
+!/src/monitoring_service/grafana/dashboards/movie-recommendation-api-monitoring.json
 # Demo users for tests and CI; the real users.json stays local
 !src/user_authentication_service/users.example.json
 

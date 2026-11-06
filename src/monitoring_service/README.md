@@ -1,8 +1,14 @@
 # Monitoring service
 
-The current baseline runs Prometheus and Grafana through the root Docker Compose configuration. Prometheus scrapes its own metrics every 15 seconds. Grafana's Prometheus data source is provisioned automatically from versioned YAML.
+Prometheus scrapes itself and each prediction replica every 15 seconds. Grafana
+automatically loads the Prometheus data source and the **Movie Recommendation
+API Monitoring** dashboard from the repository.
 
-Prediction API metrics, drift detection, application dashboards, and alerts are not implemented yet. A healthy Prometheus self-target does not establish prediction API availability or model quality.
+The dashboard shows prediction requests per replica since startup, the combined
+request rate over five minutes, and the number of reachable prediction replicas.
+The counter increments when a request reaches the prediction handler. A restart
+resets that replica's counter. Data drift detection and alerts are outside the
+current monitoring scope.
 
 ## Prerequisites
 
@@ -51,7 +57,7 @@ docker compose logs --tail=50 prometheus grafana
 
 ## Verify
 
-1. Open http://localhost:9090/targets. The `prometheus` target should be **UP**.
+1. Open http://localhost:9090/targets. The `prometheus` target should be **UP**. With prediction running, the `prediction` job should show three **UP** targets.
 2. Open http://localhost:3000 and sign in with your configured credentials.
 3. Under **Connections → Data sources**, confirm that **Prometheus** already exists.
 4. Open **Explore**, select **Prometheus**, switch the query editor to **Code**, and run:
@@ -64,10 +70,30 @@ docker compose logs --tail=50 prometheus grafana
 
 Grafana connects to `http://prometheus:9090` using Compose service discovery. Prometheus scrapes `localhost:9090` because that target is inside its own container. Browser URLs use the ports published on the host.
 
+## Generate demo traffic
+
+With Nginx and the prediction replicas running, use the
+[prediction demo script](../../scripts/demo_prediction.py) from the repository root:
+
+```bash
+python3 scripts/demo_prediction.py --user-id 4 --authenticated 30 --unauthenticated 10
+```
+
+The script prompts for the API password. It defaults to the demo username
+`alice`. Use `--username` for a different account and choose a user ID in the
+loaded dataset. The script summarizes the HTTP responses. With valid credentials
+and a valid user ID, expect 30 responses with HTTP 200 and 10 with HTTP 401.
+
+After the next scrape, open **Movie Recommendation API Monitoring** in Grafana.
+The per-replica counters should increase by 30 in total. Requests rejected with
+HTTP 401 stop at authentication, before the prediction handler increments its
+counter.
+
 ## Configuration and storage
 
 - `prometheus/prometheus.yml`: scrape configuration, mounted read-only.
 - `grafana/provisioning/datasources/prometheus.yml`: automatically provisions the default Prometheus data source, mounted read-only.
+- `grafana/provisioning/dashboards/prediction.yml` and `grafana/dashboards/`: dashboard provider and versioned dashboard JSON, mounted read-only.
 - `prometheus_data`: named volume mounted at `/prometheus` to preserve collected metrics across container recreation, subject to Prometheus retention settings.
 - `grafana_data`: named volume mounted at `/var/lib/grafana` to preserve Grafana's database, accounts, and saved dashboards.
 
