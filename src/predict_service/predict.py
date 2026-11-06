@@ -3,7 +3,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
 from pydantic import BaseModel, Field
 
 import config
@@ -30,6 +31,11 @@ app = FastAPI(
 )
 app.include_router(auth_router)
 
+PREDICTION_REQUESTS = Counter(
+    'prediction_requests_total',
+    'Number of requests that reached the prediction handler.',
+)
+
 
 # data model for input query
 class PredictRequest(BaseModel):
@@ -55,6 +61,7 @@ class PredictRequest(BaseModel):
 # prediction endpoint
 @app.post('/predict', dependencies=[Depends(require_predict_access)])
 def predict(request: PredictRequest):
+    PREDICTION_REQUESTS.inc()
     unknown_ids = [i for i in request.user_ids if i not in user_matrix.index]
     if unknown_ids:
         raise HTTPException(status_code=404, detail=f'Unknown user ids: {unknown_ids}')
@@ -88,3 +95,11 @@ def predict(request: PredictRequest):
 def model_info():
     """Report the immutable registry selection loaded by this replica."""
     return {'model_uri': recommender.uri, 'model_type': recommender.model_type}
+
+
+@app.get('/metrics', include_in_schema=False)
+def metrics():
+    return Response(
+        content=generate_latest(),
+        headers={'Content-Type': CONTENT_TYPE_LATEST},
+    )
