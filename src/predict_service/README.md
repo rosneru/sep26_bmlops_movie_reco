@@ -66,8 +66,10 @@ the next prediction startup, not during active requests. After training, run
 `docker compose restart predict` to load the newest version. After changing
 serving settings, recreate all replicas with `docker compose up -d predict nginx`.
 Each replica resolves latest independently; avoid concurrent registration during
-a restart if all replicas must use exactly the same version. Future Airflow work
-will validate candidates and promote a champion alias before restarting prediction.
+a restart if all replicas must use exactly the same version. With
+`PREDICT_MODEL_VERSION=@latest-verified`, prediction resolves the version selected
+by Airflow after candidate preflight. See the [Airflow setup](../../airflow/README.md)
+for how to initialize the alias and run a rollout.
 To roll back, optionally set a numeric PREDICT_MODEL_VERSION and recreate the
 replicas. Set it back to latest to resume automatic selection.
 Build the matching image when switching type or after source/dependency changes.

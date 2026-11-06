@@ -267,28 +267,31 @@ is blocked even if a model version was registered remotely.
 
 `deploy_predict` calls `airflow/dags/prediction_deployment.py` at task execution:
 
-1. Require three healthy, consistent running KNN replicas and a running nginx.
-2. Read their actual served model version and immutable Docker image ID for rollback.
+1. Check for three healthy KNN replicas or a first run with no running replicas.
+2. For an update, read the currently served version for rollback.
 3. Start an isolated candidate API container with the newly built prediction image
    and the exact model version from training; check authenticated `/model` and
    `/predict` before touching the live service.
-4. Use Compose to recreate only `predict`, with three replicas, an explicit image
-   ID and model version. No build/pull or unrelated service restart happens here.
-5. Check the version and a real seeded prediction on every replica, reload nginx
-   DNS/upstreams, and verify both endpoints through nginx as well.
-6. Persist `PREDICT_MODEL_TYPE`, `PREDICT_MODEL_NAME`, `PREDICT_MODEL_VERSION` in
-   root `.env`, preserving other settings. Future normal Compose starts use that
-   numeric version. There is no separate password or release JSON file.
-7. On failure after rollout begins, recreate the previous model/image, verify it,
-   and persist the restored version. The Airflow task remains failed so the
-   unsuccessful release is visible. Preflight failure leaves live replicas alone.
+4. Move the configured MLflow serving alias to the candidate version.
+5. Start prediction and nginx on the first run. On updates, restart the three
+   existing prediction replicas. Each resolves the alias at startup
+   and reports the numeric version it loaded.
+6. Verify every replica and test prediction through nginx. On failure, restore
+   the alias to the previously served version, restart the replicas, and verify them.
 
-The Scheduler mounts the project at the same absolute daemon-visible path so
-Compose's relative bind paths resolve correctly on Docker Desktop. This mount
-is writable because the task updates only the three serving-selection keys in
-`.env`; it also makes the local `.env` accessible to that execution container.
-The API and DAG processor do not get this project-root mount or Docker socket.
-Temporary `.env.rollout-*` files are excluded from Git and Docker build context.
+Set `PREDICT_MODEL_VERSION=@latest-verified` in the root `.env` and recreate the
+scheduler. For a fresh registry, prepare the rating batches, build the local
+images with `docker compose build data_preparation train predict`, start Airflow,
+and trigger `training_pipeline`.
+The DAG assigns the alias after the first model passes preflight and starts
+prediction and nginx. If prediction is already running, configure its replicas
+to use an existing alias before attempting an update. The registry account
+needs permission to set the alias. Coordinate changes to a shared alias during
+rollout. A failed first deployment has no previous serving version to restore.
+
+The scheduler mounts the checkout read-only at its daemon-visible path so
+Compose can read its configuration and resolve relative bind paths. MLflow
+stores the serving selection, so Airflow does not need to update `.env`.
 
 `PREDICT_SMOKE_USERNAME` and `PREDICT_SMOKE_PASSWORD` in the root `.env` select
 an existing API account (for the demo account: `alice` / `alice123`). The task
@@ -306,10 +309,10 @@ Old `PREDICT_SMOKE_TOKEN` settings are no longer used. The check selects an exis
 user ID from the processed user matrix and expects ten distinct movie IDs. This
 is a functional serving check, not a recommendation-quality evaluation.
 
-The rollout recreates the replicas and may briefly interrupt requests; this is
+The rollout restarts the replicas and may briefly interrupt requests; this is
 not a zero-downtime deployment. Automatic rollback is attempted for handled task
 errors, not guaranteed after a host crash or forced task termination. It restores
-model/image selection, not historical processed CSVs. Do not edit `.env`, change
+the previously served model version. Historical processed CSVs are outside rollback. Do not edit `.env`, change
 models, scale predict, or run another Compose/DVC preparation while this DAG is
 running. Retain the previous local image and registered model for rollback.
 

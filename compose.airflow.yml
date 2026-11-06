@@ -89,6 +89,7 @@ services:
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow}
       MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-}
       MLFLOW_TRACKING_PASSWORD: ${DAGSHUB_TOKEN:-}
+      PREDICT_MODEL_VERSION: ${PREDICT_MODEL_VERSION:-latest}
       PREDICT_SMOKE_USERNAME: ${PREDICT_SMOKE_USERNAME:-alice}
       PREDICT_SMOKE_PASSWORD: ${PREDICT_SMOKE_PASSWORD:-}
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:?Set AUTH_SECRET_KEY in the root .env file or your shell}
@@ -101,8 +102,7 @@ services:
       - airflow_logs:/opt/airflow/logs
       - /var/run/docker.sock:/var/run/docker.sock
       # Compose inside Scheduler must use the same absolute path as the daemon.
-      # Write access is used only to persist the selected version in root .env.
-      - .:${AIRFLOW_DOCKER_PROJECT_DIR:?Run python airflow/setup_local.py}
+      - .:${AIRFLOW_DOCKER_PROJECT_DIR:?Run python airflow/setup_local.py}:ro
     command: ["scheduler"]
     restart: unless-stopped
     healthcheck:
