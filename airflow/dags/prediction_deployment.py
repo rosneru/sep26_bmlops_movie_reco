@@ -93,9 +93,22 @@ def _start_prediction(root, model_name):
     )
     subprocess.run(
         [
-            'docker', 'compose', '-p', PROJECT, '-f', str(root / 'docker-compose.yml'),
-            'up', '-d', '--no-build', '--wait', '--wait-timeout', '180',
-            '--scale', f'predict={REPLICAS}', 'predict', 'nginx',
+            'docker',
+            'compose',
+            '-p',
+            PROJECT,
+            '-f',
+            str(root / 'docker-compose.yml'),
+            'up',
+            '-d',
+            '--no-build',
+            '--wait',
+            '--wait-timeout',
+            '180',
+            '--scale',
+            f'predict={REPLICAS}',
+            'predict',
+            'nginx',
         ],
         env=environment,
         check=True,
@@ -129,22 +142,90 @@ def _reload_nginx(client):
             raise RuntimeError('Nginx validation/reload failed')
 
 
-def _registry_alias(method, name, alias, version=None):
+def _registry_alias(method, name, alias, version=None, allow_missing=False):
     endpoint = (
         os.environ['MLFLOW_TRACKING_URI'].rstrip('/')
         + '/api/2.0/mlflow/registered-models/alias'
     )
-    auth = (os.environ['MLFLOW_TRACKING_USERNAME'], os.environ['MLFLOW_TRACKING_PASSWORD'])
+    auth = (
+        os.environ['MLFLOW_TRACKING_USERNAME'],
+        os.environ['MLFLOW_TRACKING_PASSWORD'],
+    )
     fields = {'name': name, 'alias': alias}
     if method == 'GET':
+        if allow_missing:
+            # Missing-alias error codes differ across registry implementations.
+            # Read aliases from the model instead; missing models/auth failures
+            # must still raise rather than being mistaken for an absent alias.
+            response = requests.get(
+                endpoint.removesuffix('/alias') + '/get',
+                params={'name': name},
+                auth=auth,
+                timeout=15,
+            )
+            response.raise_for_status()
+            aliases = response.json()['registered_model'].get('aliases', [])
+            return next(
+                (str(item['version']) for item in aliases if item['alias'] == alias),
+                None,
+            )
         response = requests.get(endpoint, params=fields, auth=auth, timeout=15)
         response.raise_for_status()
         return str(response.json()['model_version']['version'])
 
-    response = requests.post(
-        endpoint, json={**fields, 'version': version}, auth=auth, timeout=15
-    )
+    if method == 'DELETE':
+        response = requests.delete(endpoint, json=fields, auth=auth, timeout=15)
+    else:
+        response = requests.post(
+            endpoint, json={**fields, 'version': version}, auth=auth, timeout=15
+        )
     response.raise_for_status()
+
+
+def _deployment_containers(client):
+    """Inventory only this project's serving containers, including stopped ones."""
+    return [
+        container
+        for service in ('predict', 'nginx')
+        for container in client.containers.list(
+            all=True,
+            filters={
+                'label': [
+                    f'com.docker.compose.project={PROJECT}',
+                    f'com.docker.compose.service={service}',
+                ]
+            },
+        )
+    ]
+
+
+def _recover_initial_deployment(client, before_ids, name, alias, version, previous):
+    """Restore the alias and remove newly created serving containers, not volumes."""
+    errors = []
+    try:
+        selected = _registry_alias('GET', name, alias, allow_missing=True)
+        if selected not in (version, previous):
+            raise RuntimeError('Alias changed externally; refusing to overwrite it')
+        if selected != previous:
+            if previous is None:
+                _registry_alias('DELETE', name, alias)
+            else:
+                _registry_alias('POST', name, alias, previous)
+        if _registry_alias('GET', name, alias, allow_missing=True) != previous:
+            raise RuntimeError('Initial alias restoration could not be verified')
+    except (requests.RequestException, RuntimeError, ValueError, KeyError) as error:
+        errors.append(error)
+    # Cleanup is still attempted if restoring the registry fails.
+    for container in _deployment_containers(client):
+        if container.id not in before_ids:
+            try:
+                container.remove(force=True)
+            except docker.errors.DockerException as error:
+                errors.append(error)
+    if errors:
+        raise RuntimeError(
+            'Initial deployment recovery was incomplete; inspect alias and serving containers'
+        ) from errors[0]
 
 
 def deploy_prediction(training_result):
@@ -180,13 +261,18 @@ def deploy_prediction(training_result):
     with closing(docker.from_env()) as client:
         existing = _replicas(client)
         if existing and len(existing) != REPLICAS:
-            raise RuntimeError('Expected either no running prediction replicas or three')
+            raise RuntimeError(
+                'Expected either no running prediction replicas or three'
+            )
         if existing:
             network = next(iter(existing[0].attrs['NetworkSettings']['Networks']))
             headers = _login(_url(existing[0], network), username, password)
             baseline = []
             for container in existing:
-                if container.attrs['State'].get('Health', {}).get('Status') != 'healthy':
+                if (
+                    container.attrs['State'].get('Health', {}).get('Status')
+                    != 'healthy'
+                ):
                     raise RuntimeError(
                         'Previous prediction service must be healthy before rollout'
                     )
@@ -209,14 +295,39 @@ def deploy_prediction(training_result):
             if len(old_images) != 1 or not old_version.isdecimal():
                 raise RuntimeError('Cannot capture an unambiguous rollback model/image')
             if old_name != name or any(
-                f'PREDICT_MODEL_VERSION={selector}' not in container.attrs['Config']['Env']
+                f'PREDICT_MODEL_VERSION={selector}'
+                not in container.attrs['Config']['Env']
                 for container in existing
             ):
-                raise RuntimeError('All replicas must be configured for the same serving alias')
+                raise RuntimeError(
+                    'All replicas must be configured for the same serving alias'
+                )
             previous_alias_version = _registry_alias('GET', name, alias)
+            if previous_alias_version != old_version:
+                logger.warning(
+                    'Serving alias points to version %s, but replicas serve %s; '
+                    'continuing with candidate validation. Rollback after promotion '
+                    'will restore the actually served version %s.',
+                    previous_alias_version,
+                    old_version,
+                    old_version,
+                )
             candidate_image = next(iter(old_images))
 
         else:
+            initial_containers = _deployment_containers(client)
+            if any(
+                container.labels.get('com.docker.compose.service') == 'predict'
+                for container in initial_containers
+            ):
+                raise RuntimeError(
+                    'Stopped prediction containers exist; reconcile or remove them '
+                    'before an initial deployment'
+                )
+            before_ids = {container.id for container in initial_containers}
+            previous_alias_version = _registry_alias(
+                'GET', name, alias, allow_missing=True
+            )
             network = f'{PROJECT}_default'
             candidate_image = client.images.get('movie-reco-predict:knn').id
 
@@ -263,7 +374,10 @@ def deploy_prediction(training_result):
             candidate.remove(force=True)
 
         logger.info('Candidate passed preflight; deploying KNN version %s', version)
-        if existing and _registry_alias('GET', name, alias) != previous_alias_version:
+        if (
+            _registry_alias('GET', name, alias, allow_missing=not existing)
+            != previous_alias_version
+        ):
             raise RuntimeError('The serving alias changed during candidate preflight')
         rollout_started = False
         try:
@@ -285,9 +399,12 @@ def deploy_prediction(training_result):
                 raise RuntimeError('The serving alias changed during rollout')
         except Exception as error:
             if not existing:
+                _recover_initial_deployment(
+                    client, before_ids, name, alias, version, previous_alias_version
+                )
                 raise RuntimeError(
-                    'Initial prediction deployment failed. Check the serving alias '
-                    'and prediction logs before retrying deployment.'
+                    'Initial prediction deployment failed; previous alias state '
+                    'restored and newly created serving containers removed'
                 ) from error
             logger.error(
                 'Rollout failed; restoring previous model version %s', old_version
@@ -295,11 +412,19 @@ def deploy_prediction(training_result):
             try:
                 selected = _registry_alias('GET', name, alias)
                 if selected not in (version, previous_alias_version):
-                    raise RuntimeError('Alias changed externally; refusing to overwrite it')
-                rollback_version = old_version if rollout_started else previous_alias_version
+                    raise RuntimeError(
+                        'Alias changed externally; refusing to overwrite it'
+                    )
+                # A registry write may succeed even if its response is lost.
+                restore_served = rollout_started or (
+                    selected == version and selected != previous_alias_version
+                )
+                rollback_version = (
+                    old_version if restore_served else previous_alias_version
+                )
                 if selected != rollback_version:
                     _registry_alias('POST', name, alias, rollback_version)
-                if rollout_started:
+                if restore_served:
                     for replica in existing:
                         replica.restart(timeout=15)
                 restored = _replicas(client)

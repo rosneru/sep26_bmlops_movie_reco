@@ -268,8 +268,11 @@ is blocked even if a model version was registered remotely.
 `deploy_predict` calls `airflow/dags/prediction_deployment.py` at task execution:
 
 1. Check for three healthy KNN replicas or a first run with no running replicas.
-2. For an update, read the currently served version for rollback.
-3. Start an isolated candidate API container with the newly built prediction image
+2. For an update, record both the alias target and the version actually loaded
+   by the replicas. If they differ, log a warning and continue candidate testing;
+   no manual reconciliation is required solely because of this initial mismatch.
+3. Start an isolated candidate API container with the existing replicas' image
+   (or the local prediction image on a first deployment)
    and the exact model version from training; check authenticated `/model` and
    `/predict` before touching the live service.
 4. Move the configured MLflow serving alias to the candidate version.
@@ -287,7 +290,47 @@ The DAG assigns the alias after the first model passes preflight and starts
 prediction and nginx. If prediction is already running, configure its replicas
 to use an existing alias before attempting an update. The registry account
 needs permission to set the alias. Coordinate changes to a shared alias during
-rollout. A failed first deployment has no previous serving version to restore.
+rollout. Use a separate alias for each personal environment; the alias checks
+are conflict detection, not a distributed lock. Only one publisher may manage
+an environment's prediction containers and alias at a time.
+After promotion, rollback restores the version that was actually serving,
+even if the alias originally pointed elsewhere. If promotion fails before any
+registry change is observed, the original alias is left unchanged. A lost write
+response is reconciled by reading the alias before deciding recovery. Changes
+to an unrelated alias target during rollout are not overwritten.
+
+### Recovery after a failed first deployment
+
+Before first deployment, the task records the alias's previous value (or its
+absence) and the IDs of existing serving containers. If promotion/startup or
+verification fails, it restores that alias state and removes only newly created
+`predict`/`nginx` containers in this Compose project, including stopped ones.
+An existing nginx container is preserved. Volumes, datasets, model versions and
+unrelated containers are not removed. If the alias was created by this attempt,
+recovery deletes it; the registry account therefore also needs alias deletion
+permission. If the alias changed to an unrelated version, recovery refuses to
+overwrite it and reports incomplete recovery, while still attempting container
+cleanup. Inspect the alias manually in that case.
+
+A first deployment with stopped prediction containers is rejected before
+promotion: reconcile/start those containers, or remove the obsolete prediction
+containers explicitly, before retrying. Successful recovery still leaves the
+Airflow task failed so the unsuccessful release is visible. No recovery is
+guaranteed after forced termination or loss of registry/Docker access.
+
+Manual verification (use a dedicated alias/environment, not a team alias):
+
+1. With three replicas serving version A, point the test alias to B without
+   restarting them. Deploy candidate C: expect a warning, followed by normal
+   candidate validation and promotion. On success, alias and replicas serve C.
+   Repeat with an injected post-promotion failure: expect alias and replicas to
+   return to A (the previously served version, not the original alias target B).
+2. In an empty test deployment, record whether the alias exists and its value.
+   Simulate a failure in startup or final verification after alias promotion.
+   Expect the original alias state and no newly created serving containers.
+   A missing previous alias must be missing again after recovery.
+3. Retry with valid settings: expect three replicas and nginx to serve the
+   selected version. Do not inject faults into a shared running deployment.
 
 The scheduler mounts the checkout read-only at its daemon-visible path so
 Compose can read its configuration and resolve relative bind paths. MLflow
