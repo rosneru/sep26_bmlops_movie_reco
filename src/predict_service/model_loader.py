@@ -47,9 +47,14 @@ def load_registered_model():
                 f'Newest version of {name} is not READY; retry after registration completes'
             )
         version = str(newest.version)
+    elif version.startswith('@') and version[1:].strip():
+        selected = mlflow.MlflowClient().get_model_version_by_alias(name, version[1:])
+        if selected.status != 'READY':
+            raise ValueError(f'Alias {version} for {name} does not point to a READY model')
+        version = str(selected.version)
     elif not version.isascii() or not version.isdecimal() or int(version) < 1:
         raise ValueError(
-            'PREDICT_MODEL_VERSION must be latest or a positive registry version'
+            'PREDICT_MODEL_VERSION must be latest, a positive registry version, or @alias'
         )
     uri = f'models:/{name}/{version}'
     directory = Path(mlflow.artifacts.download_artifacts(artifact_uri=uri))
