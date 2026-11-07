@@ -1,8 +1,8 @@
-"""Manually prepare features, then train/register KNN through Docker containers."""
+"""Prepare, train and deploy local data daily at 09:40 Berlin time or on manual trigger."""
 
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import PurePosixPath
 
 from airflow.exceptions import AirflowException
@@ -10,6 +10,7 @@ from airflow.providers.docker.operators.docker import DockerOperator
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import DAG
 from airflow.sdk.log import mask_secret
+from airflow.timetables.trigger import CronTriggerTimetable
 from docker.types import Mount
 from prediction_deployment import deploy_prediction
 
@@ -59,8 +60,11 @@ class MLflowTrainingOperator(DockerOperator):
 with DAG(
     dag_id='training_pipeline',
     description='Prepare data, register KNN, then deploy and verify the exact model version.',
-    start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
-    schedule=None,
+    # No historical start date: first activation waits for the next scheduled tick.
+    # A zero grace period avoids picking up a recently missed tick.
+    schedule=CronTriggerTimetable(
+        '40 9 * * *', timezone='Europe/Berlin', run_immediately=timedelta(0)
+    ),
     catchup=False,
     max_active_runs=1,
     max_active_tasks=1,

@@ -18,8 +18,9 @@ docker compose ps -a airflow-init airflow-postgres airflow-api-server airflow-sc
 
 Expected: `airflow-init` shows `Exited (0)` and all four long-running services
 show `healthy`. Open http://localhost:8081 with your `.env` dashboard credentials.
-Starting these services does not trigger training; run `training_pipeline`
-manually from the dashboard. If initialization fails, inspect
+The `training_pipeline` DAG supports manual triggers and a daily 09:40
+Europe/Berlin schedule when unpaused. Starting services does not itself request
+a manual training run; an already-unpaused DAG can run when its schedule is due. If initialization fails, inspect
 `docker compose logs airflow-init`; new Airflow runtime services remain blocked.
 Use Compose `up` for this dependency ordering; `restart` does not replay it.
 For a new machine without local settings, follow the setup sections below.
@@ -112,7 +113,8 @@ it does not reset the database. On migration failure, new runtime containers do
 not start. Existing already-running services are not automatically stopped by
 a dependency failure. `restart` or a Docker daemon restart does not replay this
 Compose startup gate; use Compose up for the ordered startup. Starting the
-infrastructure does not trigger the manual training pipeline.
+infrastructure does not request a manual training run; an unpaused training
+DAG is also eligible for its daily schedule.
 
 References:
 - https://airflow.apache.org/docs/apache-airflow/3.3.2/howto/docker-compose/index.html
@@ -140,6 +142,80 @@ docker compose restart airflow-dag-processor
 ```
 
 There is no separate pytest file for this check; use the DAG directly in the UI.
+
+## Daily 09:40 schedule and manual execution
+
+`training_pipeline` now has two execution modes using the same three tasks:
+
+- Scheduled: every day at **09:40 Europe/Berlin** (`40 9 * * *`).
+- Manual: the dashboard **Trigger** button remains available at any time.
+
+The explicit `CronTriggerTimetable` has no historical start date and uses
+`run_immediately=timedelta(0)` (zero grace period), so first activation waits for
+the next scheduled tick instead of picking up a recently missed one. `catchup=False` prevents a backlog of daily runs from the past.
+After an outage on a previously scheduled DAG, Airflow may pick up the latest
+eligible tick immediately; it does not replay every missed day. The schedule follows Berlin local time,
+including summer/winter clock changes; the dashboard may display UTC unless its
+UI timezone is changed to Europe/Berlin.
+
+This stage still reads **local files** and `split.current_part` from `params.yaml`.
+It does not download from DagsHub or check for new data. Each successful run,
+even with unchanged data, trains/registers a new model version and deploys it.
+Use a personal serving alias. Data-arrival detection will be added separately.
+
+### Where to change the scheduled time
+
+Edit the `schedule` argument in
+[`airflow/dags/training_pipeline.py`](dags/training_pipeline.py), inside `with DAG(...)`:
+
+```python
+schedule=CronTriggerTimetable(
+    '40 9 * * *', timezone='Europe/Berlin', run_immediately=timedelta(0)
+),
+```
+
+The five cron fields are **minute, hour, day of month, month, day of week**.
+For a daily run, change only the first two fields:
+
+| Cron expression | Daily execution time in the configured timezone |
+| --- | --- |
+| `40 9 * * *` | 09:40 (current setting) |
+| `0 12 * * *` | 12:00 noon |
+| `30 18 * * *` | 18:30 |
+
+Change `timezone='Europe/Berlin'` only if another scheduling timezone is wanted.
+The execution time is defined in the DAG, not in `.env`, `params.yaml`, or
+Compose. Changing the dashboard's display timezone does not change the schedule.
+After saving, allow the DAG processor to reload the file or restart it using the
+command below. Refresh the dashboard and check **Schedule** and **Next Run**.
+No image rebuild is required. Manual triggers remain available after a schedule
+change. If today's selected time has already passed, a newly activated schedule
+normally selects the next eligible tick; always confirm **Next Run** in the UI.
+
+### Activate and verify
+
+1. Keep Docker Desktop/Engine and the Airflow services running at the scheduled
+   time. Existing preparation, training and prediction images must be built,
+   and MLflow/API credentials and serving configuration must be valid.
+2. The DAG directory is bind-mounted: no image rebuild is needed for this Python
+   change. Allow the DAG processor to reload it, or request discovery with:
+
+```powershell
+docker compose restart airflow-dag-processor
+```
+
+3. Open http://localhost:8081. Confirm `training_pipeline` shows a daily 09:40
+   schedule, then **unpause** it. New DAGs remain paused by default; an existing
+   unpaused DAG becomes eligible automatically when this definition is loaded.
+4. Inspect the next scheduled run, accounting for the dashboard timezone.
+   At the scheduled time, expect a run of type **Scheduled**, with
+   `prepare_features -> train_knn -> deploy_predict` succeeding in order.
+5. To test the work immediately without waiting for the scheduled time, click **Trigger**.
+   Expect a run of type **Manual**; this does not replace the daily schedule.
+6. `max_active_runs=1` prevents scheduled/manual runs of this DAG from executing
+   together. A second run may wait. Do not run Compose/DVC preparation in parallel.
+7. Pause the DAG to disable automatic execution when daily retraining is not
+   wanted. Do not change the production cron to a short interval just for testing.
 
 ## Run preparation, KNN training and prediction deployment
 
@@ -210,8 +286,8 @@ Get-Item data/processed/user_matrix.csv, data/processed/movie_matrix.csv |
     Select-Object Name, Length, LastWriteTime
 ```
 
-The DAG has no automatic schedule, allows only one active run, and has no task
-retries. Do not also run manual Compose/DVC preparation concurrently: all paths
+The DAG runs daily at 09:40 Europe/Berlin and also accepts manual triggers.
+It allows only one active run and has no task retries. Do not also run manual Compose/DVC preparation concurrently: all paths
 write the same output files. Preparation has networking disabled. Training has
 outbound bridge networking for DagsHub and a read-only processed-data mount.
 Each child container is removed after success or failure; stdout/stderr remains
