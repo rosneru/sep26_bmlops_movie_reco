@@ -1,9 +1,11 @@
 import os
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel, Field
 
 import config
@@ -30,6 +32,23 @@ app = FastAPI(
 )
 app.include_router(auth_router)
 
+PREDICTION_REQUESTS = Counter(
+    'prediction_requests_total',
+    'Number of prediction requests by HTTP status.',
+    ['status'],
+)
+
+
+PREDICTION_HANDLER_REQUESTS = Counter(
+    'prediction_handler_requests_total',
+    'Number of requests that reached the prediction handler.',
+)
+
+PREDICTION_REQUEST_DURATION = Histogram(
+    'prediction_request_duration_seconds',
+    'Time spent handling POST /predict requests.',
+)
+
 
 # data model for input query
 class PredictRequest(BaseModel):
@@ -55,6 +74,7 @@ class PredictRequest(BaseModel):
 # prediction endpoint
 @app.post('/predict', dependencies=[Depends(require_predict_access)])
 def predict(request: PredictRequest):
+    PREDICTION_HANDLER_REQUESTS.inc()
     unknown_ids = [i for i in request.user_ids if i not in user_matrix.index]
     if unknown_ids:
         raise HTTPException(status_code=404, detail=f'Unknown user ids: {unknown_ids}')
@@ -88,3 +108,29 @@ def predict(request: PredictRequest):
 def model_info():
     """Report the immutable registry selection loaded by this replica."""
     return {'model_uri': recommender.uri, 'model_type': recommender.model_type}
+
+
+@app.get('/metrics', include_in_schema=False)
+def metrics():
+    return Response(
+        content=generate_latest(),
+        headers={'Content-Type': CONTENT_TYPE_LATEST},
+    )
+
+
+@app.middleware('http')
+async def count_prediction_requests(request: Request, call_next):
+    if request.method != 'POST' or request.url.path != '/predict':
+        return await call_next(request)
+
+    started = perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        PREDICTION_REQUESTS.labels(status='500').inc()
+        raise
+    finally:
+        PREDICTION_REQUEST_DURATION.observe(perf_counter() - started)
+
+    PREDICTION_REQUESTS.labels(status=str(response.status_code)).inc()
+    return response

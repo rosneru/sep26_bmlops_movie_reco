@@ -109,6 +109,15 @@ class RegistryPredictionTests(unittest.TestCase):
                 recommender = load_registered_model()
                 self.assertEqual(recommender.uri, 'models:/review-knn/2')
 
+    def test_alias_resolves_once_to_loaded_numeric_version(self):
+        client = mlflow.MlflowClient()
+        client.set_registered_model_alias('review-knn', 'latest-verified', '1')
+        with patch.dict(os.environ, {'PREDICT_MODEL_VERSION': '@latest-verified'}):
+            first = load_registered_model()
+            client.set_registered_model_alias('review-knn', 'latest-verified', '2')
+            self.assertEqual(first.uri, 'models:/review-knn/1')
+            self.assertEqual(load_registered_model().uri, 'models:/review-knn/2')
+
     def test_empty_registry_requires_training(self):
         with (
             patch.dict(
