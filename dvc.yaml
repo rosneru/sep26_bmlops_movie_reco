@@ -1,20 +1,13 @@
 stages:
-  # Windows_Version
-  # Windows PowerShell: run from the project root with the Python environment active.
-  # Set this once in each new terminal BEFORE running DVC:
-  #   $env:PYTHONPATH = "src"
-  # Then run the desired stage, for example: dvc repro ingest
-  # DVC runs the required upstream stages automatically when they have changed.
-  # Commands below avoid Bash syntax; ingest uses Python for portable file copying.
-
+  # Linux_Version
   import_raw_data:
-    cmd: python src/initial_data_import/import_raw_data.py
+    cmd: PYTHONPATH=src python src/initial_data_import/import_raw_data.py
     deps:
       - src/initial_data_import/import_raw_data.py
       - src/config.py
     # The raw data and its parts are the local data source of the simulation.
     # They stay on this machine ('cache: false'), so 'dvc push' does not
-    # upload them. The 'ingest' stage selects the source data eligible for upload.
+    # upload them. Only the stage 'ingest' decides what reaches DagsHub.
     outs:
       - data/raw/movies.csv:
           cache: false
@@ -22,7 +15,7 @@ stages:
           cache: false
 
   split_data:
-    cmd: python src/initial_data_import/split_data.py --n-parts ${split.n_parts}
+    cmd: PYTHONPATH=src python src/initial_data_import/split_data.py --n-parts ${split.n_parts}
     deps:
       - src/initial_data_import/split_data.py
       - src/config.py
@@ -35,20 +28,14 @@ stages:
 
   # Simulates the data that has "arrived" so far: movies.csv and the rating
   # parts 1..current_part. This is the only data of the source that is pushed
-  # to DagsHub by a subsequent 'dvc push'; this stage itself only copies locally.
+  # to DagsHub.
   ingest:
-    # >- folds the following lines into one command.
-    # pathlib/shutil replace Bash mkdir, cp, seq and for/do/done on Windows.
-    # :02d formats part numbers as 01, 02, ...; the upper bound includes current_part.
     cmd: >-
-      python -c "from pathlib import Path; import shutil;
-      target = Path('data/ingested');
-      (target / 'ratings_parts').mkdir(parents=True, exist_ok=True);
-      shutil.copy2('data/raw/movies.csv', target / 'movies.csv');
-      [shutil.copy2(
-      Path('data/interim/ratings_parts') / f'ratings_{i:02d}.csv',
-      target / 'ratings_parts' / f'ratings_{i:02d}.csv')
-      for i in range(1, ${split.current_part} + 1)]"
+      mkdir -p data/ingested/ratings_parts &&
+      cp data/raw/movies.csv data/ingested/ &&
+      for i in $(seq -f %02g 1 ${split.current_part}); do
+      cp data/interim/ratings_parts/ratings_$i.csv data/ingested/ratings_parts/;
+      done
     deps:
       - data/raw/movies.csv
       - data/interim/ratings_parts
@@ -58,8 +45,7 @@ stages:
       - data/ingested
 
   build_features:
-    # Build features locally from rating parts 1..current_part and the movie catalog.
-    cmd: python src/features/build_features.py --current-part ${split.current_part}
+    cmd: PYTHONPATH=src python src/features/build_features.py --current-part ${split.current_part}
     deps:
       - src/features/build_features.py
       - src/config.py
