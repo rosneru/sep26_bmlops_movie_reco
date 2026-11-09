@@ -1,127 +1,69 @@
 # Data preparation service
 
-One-off container for building and validating genre feature matrices. It reuses
-`features/build_features.py` functions and `train_service/check_data.py` checks;
-it does not perform Two-Tower normalization, train a model, or contact DagsHub.
+One-off container that builds and validates the genre feature matrices from the
+data in the DagsHub storage bucket. It reuses `features/build_features.py`
+functions, the `train_service/check_data.py` checks and the bucket client of the
+data collection service. It does not train a model or contact MLflow.
 
-Inputs (mounted read-only):
-- `data/raw/movies.csv`
-- `data/interim/ratings_parts/ratings_01.csv` through the selected part
-- `params.yaml`, using `split.current_part` by default
+## Inputs and outputs
 
-The original raw-data import/splitting remains a prerequisite, not part of this
-service. The user's profile is the average genre vector of rated movies; rating
-values are still ignored, preserving the existing feature-building behavior.
+Inputs, read from the bucket that the data collection service fills:
+- `movies.csv`
+- `ratings_parts/ratings_01.csv` up to the highest stored part, combined
+  cumulatively. With `--up-to N` only the parts `1..N` are used.
 
-Run from the project root:
+All parts from 1 to the selected one must be in the bucket, otherwise the job
+fails. `params.yaml` is not read.
 
-```powershell
-docker compose run --rm --build data_preparation
+Outputs, replaced only after both matrices pass validation:
+- `data/processed/user_matrix.csv`: per user the average genre vector of the
+  rated movies (rating values are ignored)
+- `data/processed/movie_matrix.csv`: binary genre vector per movie
+
+Each file replacement is atomic, but the pair is not a transaction: do not run
+preparation jobs concurrently or start training during a preparation run. The
+prediction service reads the user features at startup only.
+
+## Prerequisites
+
+- In the root `.env`: `DAGSHUB_S3_ENDPOINT_URL`, `DAGSHUB_BUCKET` and
+  `DAGSHUB_TOKEN` (see `.env.example`).
+- At least rating part 1 in the bucket, uploaded by the data collection service
+  (see `src/data_collection_service/README.md`).
+
+## Run
+
+From the repository root:
+
+```bash
+docker compose run --rm --build data_preparation             # all parts in the bucket
+docker compose run --rm data_preparation --up-to 2           # only the parts 1..2
 ```
 
-Optional explicit part selection:
+The service is in the `preparation` profile, so `docker compose up` does not
+start it. Rebuild the image after changes to its code, Dockerfile or
+requirements.
 
-```powershell
-docker compose run --rm data_preparation --current-part 2
+Expected log on success, exit code 0:
+
+```text
+Preparing rating parts 1..2 from bucket sep26_bmlops_movie_reco
+Data preparation passed: parts=1..2, ratings=..., users=..., movies=..., genres=...
 ```
 
-Successful runs exit with code 0 and replace:
-- `data/processed/user_matrix.csv`
-- `data/processed/movie_matrix.csv`
+Any error (missing settings, unreachable bucket, missing parts, invalid data)
+is logged as `Data preparation failed: ...` and exits with code 1, before the
+outputs are changed. Examples:
 
-The output directory is mounted writable; train/predict mount it read-only.
-Invalid/missing data exits nonzero. Existing outputs are not replaced until both
-new matrices pass validation and their temporary CSV files have been written.
-Each file replacement is atomic but the pair is not a transaction; do not run
-preparation jobs concurrently or start training during a preparation run.
-The prediction service reads user features at startup, so it does not hot-reload
-these changes. Coordinated deployment is a later orchestration step.
+| Command | Expected error |
+|---|---|
+| `--up-to 0` | `--up-to must be a positive integer` |
+| `--up-to 99` | `Rating parts 1..99 are required, but the bucket contains only the parts [...]` |
+| without `DAGSHUB_*` settings | `Missing configuration: set ...` |
 
-This service is in the `preparation` profile, so normal `docker compose up` does
-not execute it. Airflow can also execute the same image through the manual `training_pipeline` DAG; see `airflow/README.md` for setup and UI verification. No DVC lock changes,
-data uploads, or MLflow registration are performed by this command; DVC's
-`build_features` stage remains an alternative entry point for the existing flow.
+## Airflow
 
-## Manual verification (PowerShell, in order)
-
-Run these commands from the repository root with Docker Desktop running and
-the project's Python environment active. Compose also requires the existing
-root `.env` settings, even though preparation itself does not contact DagsHub.
-
-### 1. Confirm the local inputs
-
-```powershell
-Get-Content params.yaml
-Test-Path data/raw/movies.csv
-Get-ChildItem data/interim/ratings_parts/ratings_*.csv
-```
-
-`movies.csv` must exist (`True`), and all rating parts from 1 through
-`split.current_part` must be available. `n_parts` controls the number of source
-parts; `current_part` selects the cumulative range used for this run.
-If the source files are missing, prepare them first (this may download the full
-raw dataset and rebuild its chronological parts):
-
-```powershell
-$env:PYTHONPATH = "src"
-dvc repro split_data
-```
-
-### 2. Validate Compose configuration
-
-```powershell
-docker compose config --quiet
-$LASTEXITCODE
-```
-
-Expected: no configuration error and exit code `0`.
-
-### 3. Build and execute preparation
-
-```powershell
-docker compose run --rm --build data_preparation
-$LASTEXITCODE
-```
-
-Expected: `Data preparation passed: ratings=..., users=..., movies=..., genres=...`
-and exit code `0`. This checks image construction, imports, local input reading,
-feature creation, validation and writing both CSV outputs. The container exits
-after completing the job and `--rm` removes it; output files remain on the host.
-
-### 4. Inspect the outputs
-
-```powershell
-Get-Item data/processed/user_matrix.csv, data/processed/movie_matrix.csv |
-    Select-Object Name, Length, LastWriteTime
-Get-Content data/processed/user_matrix.csv -TotalCount 3
-Get-Content data/processed/movie_matrix.csv -TotalCount 3
-```
-
-Both files should be nonempty and updated. Their first columns are `userId` and
-`movieId` respectively, followed by matching genre columns. User features are
-genre averages; movie features are binary. Successful preparation replaces the
-existing processed files, so do not run it concurrently with training.
-
-### 5. Verify rejection of an invalid argument
-
-```powershell
-docker compose run --rm data_preparation --current-part 0
-$LASTEXITCODE
-```
-
-Expected: `current_part must be a positive integer` and exit code `1`.
-This failure is intentional: it verifies invalid input is rejected before
-outputs are changed. It is not a Docker installation error.
-
-### 6. Optional: select a different cumulative input range
-
-```powershell
-docker compose run --rm data_preparation --current-part 2
-$LASTEXITCODE
-```
-
-Requires both `ratings_01.csv` and `ratings_02.csv`. Expected: exit code `0` and
-outputs rebuilt from both parts combined. This argument does not modify
-`params.yaml`. Omit it to use the file's `split.current_part` again.
-
-No separate pytest file or running Airflow services are required for these checks.
+The `prepare_features` task of the `training_pipeline` DAG runs this image (see
+`airflow/README.md`). To reach the bucket, the task must pass the three
+`DAGSHUB_*` settings and allow network access. The DAG is not adapted yet: it
+still runs the container without network and mounts the old local inputs.

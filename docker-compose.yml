@@ -45,10 +45,12 @@ services:
     build:
       context: .
       dockerfile: src/data_preparation_service/Dockerfile
+    # Reads movies.csv and the rating parts from the DagsHub storage bucket.
+    environment:
+      DAGSHUB_S3_ENDPOINT_URL: ${DAGSHUB_S3_ENDPOINT_URL:?Set DAGSHUB_S3_ENDPOINT_URL in the root .env file or your shell}
+      DAGSHUB_BUCKET: ${DAGSHUB_BUCKET:?Set DAGSHUB_BUCKET in the root .env file or your shell}
+      DAGSHUB_TOKEN: ${DAGSHUB_TOKEN:?Set DAGSHUB_TOKEN in the root .env file or your shell}
     volumes:
-      - ./data/raw:/app/data/raw:ro
-      - ./data/interim/ratings_parts:/app/data/interim/ratings_parts:ro
-      - ./params.yaml:/app/params.yaml:ro
       - ./data/processed:/app/data/processed
     restart: "no"
 
