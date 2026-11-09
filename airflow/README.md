@@ -29,6 +29,7 @@ The main `docker-compose.yml` includes `compose.airflow.yml`, which uses a local
 PostgreSQL 16. The API server provides the dashboard, the scheduler coordinates
 work with LocalExecutor, and the DAG processor parses files in `airflow/dags`.
 There is no Redis or separate Celery worker. A manual infrastructure smoke-test DAG is included; the training pipeline prepares data, registers KNN and deploys/verifies its exact version.
+The `data_ingestion` DAG uploads the next rating part to the DagsHub bucket daily at 09:00; only one team member should unpause it (see `src/data_collection_service/README.md`).
 
 ## Local settings
 
