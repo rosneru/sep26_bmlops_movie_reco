@@ -9,10 +9,6 @@ RATINGS_PART_FILENAME = 'ratings_{:02d}.csv'
 PROCESSED_DATA_DIR = PROJECT_ROOT / 'data' / 'processed'
 USER_MATRIX_PATH = PROCESSED_DATA_DIR / 'user_matrix.csv'
 MOVIE_MATRIX_PATH = PROCESSED_DATA_DIR / 'movie_matrix.csv'
-MODELS_DIR = PROJECT_ROOT / 'models'
-MODEL_PATH = MODELS_DIR / 'model.pkl'
-
-N_RECOMMENDATIONS = 10
 
 # Model
 MODEL_TYPE = os.getenv("MODEL_TYPE", "knn").strip().lower()

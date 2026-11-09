@@ -8,21 +8,24 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel, Field
 
-import config
 from predict_service.model_loader import load_registered_model
 from user_authentication_service.auth import require_predict_access
 from user_authentication_service.auth import router as auth_router
 
+USER_MATRIX_PATH = Path(__file__).resolve().parents[2] / 'data' / 'processed' / 'user_matrix.csv'
+N_RECOMMENDATIONS = 10
+CANDIDATE_COUNT = 20
+
 recommender = load_registered_model()
 user_matrix = pd.read_csv(
-    Path(os.getenv('USER_MATRIX_PATH', config.USER_MATRIX_PATH)), index_col='userId'
+    Path(os.getenv('USER_MATRIX_PATH', USER_MATRIX_PATH)), index_col='userId'
 )
 if user_matrix.index.has_duplicates or user_matrix.index.isna().any():
     raise ValueError('User matrix has missing or duplicate IDs')
 missing_genres = set(recommender.genres) - set(user_matrix.columns)
 if missing_genres:
     raise ValueError(f'User matrix lacks model genres: {sorted(missing_genres)}')
-if len(recommender.movie_ids) < config.N_RECOMMENDATIONS:
+if len(recommender.movie_ids) < N_RECOMMENDATIONS:
     raise ValueError('Model catalog is too small for the requested recommendations')
 
 app = FastAPI(
@@ -82,7 +85,7 @@ def predict(request: PredictRequest):
     users = user_matrix.loc[request.user_ids]
     try:
         indices = recommender.candidates(
-            users, min(config.KNN_NEIGHBORS, len(recommender.movie_ids))
+            users, min(CANDIDATE_COUNT, len(recommender.movie_ids))
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -96,7 +99,7 @@ def predict(request: PredictRequest):
         rng = np.random.default_rng(
             None if request.seed is None else [request.seed, user_id]
         )
-        selection = rng.choice(row, size=config.N_RECOMMENDATIONS, replace=False)
+        selection = rng.choice(row, size=N_RECOMMENDATIONS, replace=False)
         recommendations.append(
             {'user_id': user_id, 'movie_ids': recommender.movie_ids[selection].tolist()}
         )
