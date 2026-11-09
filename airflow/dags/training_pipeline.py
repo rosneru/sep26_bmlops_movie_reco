@@ -1,4 +1,4 @@
-"""Prepare, train and deploy local data daily at 09:40 Berlin time or on manual trigger."""
+"""Prepare, train and deploy bucket data daily at 09:40 Berlin time or on manual trigger."""
 
 import json
 import os
@@ -17,6 +17,34 @@ from prediction_deployment import deploy_prediction
 # These are daemon-side paths. /opt/airflow is the scheduler's filesystem and
 # cannot be used as a bind source for a sibling container on Docker Desktop.
 project = PurePosixPath(os.environ['AIRFLOW_DOCKER_PROJECT_DIR'])
+
+
+class BucketPreparationOperator(DockerOperator):
+    """
+    Pass the DagsHub bucket settings privately to the preparation container.
+
+    Only execute() is overridden: it reads the settings from the scheduler
+    environment when the task runs (never during DAG serialization), masks the
+    token in the logs and adds them to the private environment, which is not
+    rendered in the UI. Image, mounts, networking, logs and cleanup are left to
+    DockerOperator.
+    """
+
+    def execute(self, context):
+        settings = {
+            name: os.environ.get(name, '')
+            for name in ('DAGSHUB_S3_ENDPOINT_URL', 'DAGSHUB_BUCKET', 'DAGSHUB_TOKEN')
+        }
+        missing = [name for name, value in settings.items() if not value.strip()]
+        if missing:
+            raise AirflowException(
+                'Missing scheduler bucket settings: '
+                + ', '.join(missing)
+                + '. Set them in .env, then recreate airflow-scheduler.'
+            )
+        mask_secret(settings['DAGSHUB_TOKEN'])
+        self._private_environment.update(settings)
+        return super().execute(context)
 
 
 class MLflowTrainingOperator(DockerOperator):
@@ -71,33 +99,19 @@ with DAG(
     dagrun_timeout=timedelta(minutes=75),
     tags=['data-preparation', 'knn', 'training', 'movie-reco'],
 ) as dag:
-    prepare_features = DockerOperator(
+    prepare_features = BucketPreparationOperator(
         task_id='prepare_features',
         image='movie-reco-data-preparation:local',
         docker_url='unix://var/run/docker.sock',
         api_version='auto',
         force_pull=False,
-        # Keep the image entrypoint; no argument means read params.yaml.
+        # Keep the image entrypoint; no argument means all parts in the bucket.
         mount_tmp_dir=False,
         mounts=[
-            Mount(
-                '/app/data/raw', str(project / 'data/raw'), type='bind', read_only=True
-            ),
-            Mount(
-                '/app/data/interim/ratings_parts',
-                str(project / 'data/interim/ratings_parts'),
-                type='bind',
-                read_only=True,
-            ),
-            Mount(
-                '/app/params.yaml',
-                str(project / 'params.yaml'),
-                type='bind',
-                read_only=True,
-            ),
             Mount('/app/data/processed', str(project / 'data/processed'), type='bind'),
         ],
-        network_mode='none',
+        # Outbound HTTPS is needed to download the inputs from the DagsHub bucket.
+        network_mode='bridge',
         auto_remove='force',
         do_xcom_push=False,
         retries=0,

@@ -89,6 +89,10 @@ services:
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-https://dagshub.com/rosneru/sep26_bmlops_movie_reco.mlflow}
       MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-}
       MLFLOW_TRACKING_PASSWORD: ${DAGSHUB_TOKEN:-}
+      # The preparation operator passes these privately to its child container.
+      DAGSHUB_S3_ENDPOINT_URL: ${DAGSHUB_S3_ENDPOINT_URL:-}
+      DAGSHUB_BUCKET: ${DAGSHUB_BUCKET:-}
+      DAGSHUB_TOKEN: ${DAGSHUB_TOKEN:-}
       PREDICT_MODEL_VERSION: ${PREDICT_MODEL_VERSION:-latest}
       PREDICT_SMOKE_USERNAME: ${PREDICT_SMOKE_USERNAME:-alice}
       PREDICT_SMOKE_PASSWORD: ${PREDICT_SMOKE_PASSWORD:-}
