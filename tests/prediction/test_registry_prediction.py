@@ -18,7 +18,8 @@ import numpy as np
 import pandas as pd
 from mlflow.exceptions import MlflowException
 
-sys.path.insert(0, '/app/src')
+SOURCE_ROOT = Path(__file__).resolve().parents[2] / 'src'
+sys.path.append(str(SOURCE_ROOT))
 from predict_service.model_loader import load_registered_model
 from src.train_service.models import knn
 from user_authentication_service.auth import ALGORITHM, SECRET_KEY
@@ -69,7 +70,7 @@ class RegistryPredictionTests(unittest.TestCase):
                     cls.data,
                     knn.parameters(cls.settings, cls.data),
                     directory,
-                    source_root=Path('/app/src'),
+                    source_root=SOURCE_ROOT,
                     run_id=run.info.run_id,
                 )
                 mlflow.log_artifacts(str(directory), artifact_path='model')
@@ -256,7 +257,7 @@ class RegistryPredictionTests(unittest.TestCase):
                 data,
                 {'serialization_format': 'pickle', 'model_type': 'two_tower'},
                 directory,
-                source_root=Path('/app/src'),
+                source_root=SOURCE_ROOT,
                 run_id=run.info.run_id,
             )
             mlflow.log_artifacts(str(directory), artifact_path='model')

@@ -11,7 +11,8 @@ FROM base AS two_tower
 RUN pip install --no-cache-dir -r requirements-two-tower.txt
 
 FROM ${PREDICT_MODEL_TYPE} AS runtime
-COPY src/ src/
+COPY src/predict_service/predict.py src/predict_service/model_loader.py src/predict_service/
+COPY src/user_authentication_service/ src/user_authentication_service/
 ARG PREDICT_MODEL_TYPE=knn
 ENV PREDICT_MODEL_TYPE=${PREDICT_MODEL_TYPE} \
     PYTHONDONTWRITEBYTECODE=1 \
