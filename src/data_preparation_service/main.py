@@ -1,4 +1,4 @@
-"""Build and validate features as a one-off job, without model training."""
+"""Build and validate features from the bucket data, without model training."""
 
 import argparse
 import logging
@@ -6,44 +6,65 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
-import yaml
 
 from src import config
+from src.data_collection_service.bucket_storage_client import (
+    BucketStorageClient,
+    StorageConfigError,
+    StorageError,
+)
 from src.features.build_features import create_user_matrix, read_movies, read_ratings
 from src.train_service.check_data import validate_matrix
 
 logger = logging.getLogger(__name__)
 
-
-def selected_part(override, params_path):
-    if override is not None:
-        value = override
-    else:
-        with params_path.open(encoding='utf-8') as stream:
-            value = yaml.safe_load(stream)['split']['current_part']
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError('current_part must be a positive integer')
-    return value
+MOVIES_KEY = 'movies.csv'
 
 
-def prepare(current_part):
-    paths = [config.RAW_DATA_DIR / 'movies.csv'] + [
-        config.RATINGS_PARTS_DIR / config.RATINGS_PART_FILENAME.format(number)
-        for number in range(1, current_part + 1)
-    ]
-    missing = [str(path) for path in paths if not path.is_file()]
-    if missing:
+def select_part_numbers(stored, up_to=None):
+    """
+    Return the numbers 1..n of the rating parts to prepare.
+
+    n is 'up_to' if given, otherwise the highest part in the bucket. The
+    ratings are cumulative, so every part from 1 to n must be stored.
+    """
+    if up_to is not None and up_to < 1:
+        raise ValueError('--up-to must be a positive integer')
+    if not stored:
         raise ValueError(
-            'Missing local inputs; prepare/split the raw data first: '
-            + ', '.join(missing)
+            'The bucket contains no rating parts; ingest data via the '
+            'data collection service first'
+        )
+    last = max(stored) if up_to is None else up_to
+    numbers = list(range(1, last + 1))
+    if not set(numbers) <= set(stored):
+        raise ValueError(
+            f'Rating parts 1..{last} are required, but the bucket contains '
+            f'only the parts {sorted(stored)}'
+        )
+    return numbers
+
+
+def download_inputs(client, part_numbers, target_dir):
+    """Download movies.csv and the given rating parts into target_dir."""
+    client.download(MOVIES_KEY, target_dir / MOVIES_KEY)
+    for number in part_numbers:
+        filename = config.RATINGS_PART_FILENAME.format(number)
+        client.download(
+            BucketStorageClient.RATINGS_PREFIX + filename, target_dir / filename
         )
 
-    logger.info('Preparing local rating parts 1..%s', current_part)
+
+def prepare(input_dir, part_numbers):
+    """Build, validate and write the feature matrices from the files in input_dir."""
     ratings = pd.concat(
-        [read_ratings(path.name, path.parent) for path in paths[1:]],
+        [
+            read_ratings(config.RATINGS_PART_FILENAME.format(number), input_dir)
+            for number in part_numbers
+        ],
         ignore_index=True,
     )
-    movies = read_movies(paths[0].name, paths[0].parent)
+    movies = read_movies(MOVIES_KEY, input_dir)
     users = create_user_matrix(ratings, movies).reset_index()
     movies = movies.drop(columns=['title'])
 
@@ -73,7 +94,9 @@ def prepare(current_part):
         (temporary / 'movie_matrix.csv').replace(config.MOVIE_MATRIX_PATH)
 
     logger.info(
-        'Data preparation passed: ratings=%s, users=%s, movies=%s, genres=%s',
+        'Data preparation passed: parts=1..%s, ratings=%s, users=%s, movies=%s, '
+        'genres=%s',
+        part_numbers[-1],
         len(ratings),
         len(users),
         len(movies),
@@ -82,21 +105,39 @@ def prepare(current_part):
     logger.info('Outputs: %s and %s', config.USER_MATRIX_PATH, config.MOVIE_MATRIX_PATH)
 
 
+def run(up_to=None):
+    client = BucketStorageClient.from_env()
+    part_numbers = select_part_numbers(client.read_stored_part_numbers(), up_to)
+    logger.info(
+        'Preparing rating parts 1..%s from bucket %s', part_numbers[-1], client.bucket
+    )
+    with tempfile.TemporaryDirectory(prefix='bucket-inputs-') as input_dir:
+        input_dir = Path(input_dir)
+        download_inputs(client, part_numbers, input_dir)
+        prepare(input_dir, part_numbers)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        '--current-part', type=int, help='Override split.current_part in params.yaml'
-    )
-    parser.add_argument(
-        '--params', type=Path, default=config.PROJECT_ROOT / 'params.yaml'
+        '--up-to',
+        type=int,
+        help='Use only the rating parts 1..UP_TO (default: all parts in the bucket)',
     )
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s'
     )
     try:
-        prepare(selected_part(args.current_part, args.params))
-    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as error:
+        run(args.up_to)
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        StorageConfigError,
+        StorageError,
+    ) as error:
         logger.error('Data preparation failed: %s', error)
         raise SystemExit(1) from error
 

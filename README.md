@@ -83,7 +83,6 @@ uv run dvc repro
 
 DVC only runs stages whose code, input data or parameters changed. Always use `uv run`, since the scripts need the project's virtual environment.
 
-`models/model.pkl` is a pre-trained model from the template and is still tracked in Git. A `train_model` stage will be added later.
 
 ### 4. Simulating new data with `split.current_part`
 
@@ -116,7 +115,7 @@ Alternatively, the [data collection service](src/data_collection_service/README.
 
 ## Testing the predict API locally
 
-The API needs `models/model.pkl` and the files in `data/processed/` (see above). Start it with:
+The API loads its model from MLflow and reads `data/processed/user_matrix.csv` at startup. Prepare or restore the matrix and export the MLflow credentials and model selector into your shell before running Uvicorn directly. Docker Compose reads the project `.env` automatically. Start the local API with:
 
 ```bash
 uv run uvicorn predict_service.predict:app --app-dir src --reload
@@ -154,49 +153,27 @@ The APIs use OAuth2 with expiring tokens: log in once at `POST /token` with user
 
 Missing, wrong or expired credentials return `401`, a user without access returns `403`. In the browser docs, click *Authorize* and enter username and password. See the [user authentication service](src/user_authentication_service/README.md) for how it works, how to add users and how to protect a new endpoint.
 
-## Testing the predict API Dockerfile
+## Run the end-to-end demo with Docker Compose
 
-While the test command remains the same (`curl -X ...`) the API docker container can be started with:
+Run these commands from the repository root. Stop any local Uvicorn process first because Nginx also uses host port 8000.
 
-```bash
-docker run --rm -p 8000:8000 movie-reco-api
-```
+1. Complete the [Airflow setup](airflow/README.md) and configure the DagsHub and Grafana credentials in your local `.env`. Set `MODEL_TYPE=knn` and `PREDICT_MODEL_TYPE=knn` for this DAG. Set `PREDICT_MODEL_VERSION=@live` if `live` is the agreed serving alias.
+2. Ensure the DagsHub storage bucket contains `movies.csv` and at least the first rating batch. Airflow now prepares features directly from this bucket. See the [data collection guide](src/data_collection_service/README.md).
+3. Build the task images and start Airflow and monitoring.
 
-## Testing the predict API with Docker compose
+   ```bash
+   docker compose config --quiet
+   docker compose build data_preparation train predict
+   docker compose up -d --build --wait airflow-api-server airflow-scheduler airflow-dag-processor
+   docker compose up -d prometheus grafana
+   ```
 
-### Start the project (currently the predict API)
-
-**NOTE:** `docker compose up` and `make run-api` cannot run at the same time because both use port 8000.
-
-```bash
-docker compose up -d --build
-```
-
-Or, call the `Makefile` with
-
-```bash
-make start-project
-```
-Again, testing can be done with `make test-api`
-
-### Stop the project (currently the predict API)
-
-```bash
-docker compose down
-```
-
-Or, call the `Makefile` with
-
-```bash
-make stop-project
-```
+4. Open Airflow at <http://localhost:8081>, unpause `training_pipeline`, and trigger it. The DAG registers a numbered KNN model, tests it, and moves the serving alias. On the first deployment, the DAG starts prediction and Nginx. If switching an existing deployment to a new alias, first point it to the currently served version, then recreate prediction and the scheduler with the updated settings.
+5. Open <http://localhost:8000/docs> and authenticate. Use `GET /model` to verify the deployed version and `POST /predict` with a known user to verify predictions. Open <http://localhost:3000> to see the three replicas and request metrics after the next scrape. See the [monitoring guide](src/monitoring_service/README.md).
 
 ## Prediction registry selection
 
-Prediction now loads the latest registered MLflow model at startup; it no longer reads the
-local model.pkl. Before following older API startup examples above, configure
-PREDICT_MODEL_TYPE and PREDICT_MODEL_NAME and register a
-model. See [prediction setup and rollback](src/predict_service/README.md).
+The API resolves `PREDICT_MODEL_VERSION` at startup. Use an alias such as `@live` for Airflow-managed deployment, a number to pin a version, or `latest` to select the highest registered version if it is ready. Leave `PREDICT_MODEL_NAME` empty to use the default for the selected model type. See [prediction setup and rollback](src/predict_service/README.md).
 
 ## MLflow on DagsHub
 

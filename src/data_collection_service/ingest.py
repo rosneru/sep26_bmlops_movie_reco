@@ -4,7 +4,7 @@ from typing import Literal
 
 import yaml
 from fastapi import HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 import config
 from data_collection_service.bucket_storage_client import (
@@ -31,13 +31,31 @@ class IngestRequest(BaseModel):
         description='After the call the bucket contains the parts '
         '1..requested_up_to. Default: split.current_part from params.yaml.',
     )
+    next_part: bool = Field(
+        default=False,
+        description='Upload only the part after the highest one in the '
+        'bucket. Cannot be combined with requested_up_to.',
+    )
 
-    # Only documentation: example body for /docs, no effect on validation
-    model_config = {'json_schema_extra': {'examples': [{'requested_up_to': 2}]}}
+    # Only documentation: example bodies for /docs, no effect on validation
+    model_config = {
+        'json_schema_extra': {
+            'examples': [{'requested_up_to': 2}, {'next_part': True}]
+        }
+    }
+
+    @model_validator(mode='after')
+    def check_exclusive(self):
+        if self.next_part and self.requested_up_to is not None:
+            raise ValueError(
+                'Pass either requested_up_to or next_part, not both'
+            )
+        return self
 
 
 class IngestResponse(BaseModel):
-    status: Literal['ingested', 'no_local_data']
+    # 'up_to_date': next_part was requested, but all local parts are stored
+    status: Literal['ingested', 'no_local_data', 'up_to_date']
     detail: str | None = None
     requested_up_to: int | None = None
     # Keys of the objects uploaded by this call
@@ -80,9 +98,14 @@ def get_requested_up_to_from_argument_or_file(
         ) from e
 
 
-def ingest_up_to(requested_up_to_arg: int | None) -> IngestResponse:
-    requested_up_to = get_requested_up_to_from_argument_or_file(
-        requested_up_to_arg
+def ingest_up_to(
+    requested_up_to_arg: int | None, next_part: bool = False
+) -> IngestResponse:
+    # With next_part, the target follows from the bucket content (see below)
+    requested_up_to = (
+        None
+        if next_part
+        else get_requested_up_to_from_argument_or_file(requested_up_to_arg)
     )
     # Get all available part file names
     part_files = sorted(RATINGS_PARTS_DIR.glob('ratings_*.csv'))
@@ -97,6 +120,27 @@ def ingest_up_to(requested_up_to_arg: int | None) -> IngestResponse:
             'Run "uv run dvc repro split_data" to create them.',
             requested_up_to=requested_up_to,
         )
+
+    try:
+        upload_client = BucketStorageClient.from_env()
+    except StorageConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    try:
+        stored_numbers = upload_client.read_stored_part_numbers()
+    except StorageError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    if next_part:
+        highest_stored = max(stored_numbers, default=0)
+        if highest_stored >= max(part_numbers):
+            return IngestResponse(
+                status='up_to_date',
+                detail=f'The bucket already contains all {max(part_numbers)} '
+                'local rating parts.',
+                requested_up_to=highest_stored,
+            )
+        requested_up_to = highest_stored + 1
 
     # Get the the range of parts that we want to have on the S3 target
     target_numbers = list(range(1, requested_up_to + 1))
@@ -125,16 +169,6 @@ def ingest_up_to(requested_up_to_arg: int | None) -> IngestResponse:
         (RATINGS_PARTS_DIR / name, BucketStorageClient.RATINGS_PREFIX + name)
         for name in part_filenames
     ]
-
-    try:
-        upload_client = BucketStorageClient.from_env()
-    except StorageConfigError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
-    try:
-        stored_numbers = upload_client.read_stored_part_numbers()
-    except StorageError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
 
     # The bucket is append-only, so it can't go back to fewer parts
     if stored_numbers and max(stored_numbers) > requested_up_to:

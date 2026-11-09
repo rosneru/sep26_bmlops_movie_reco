@@ -1,12 +1,12 @@
 schema: '2.0'
 stages:
   import_raw_data:
-    cmd: python src/initial_data_import/import_raw_data.py
+    cmd: PYTHONPATH=src python src/initial_data_import/import_raw_data.py
     deps:
     - path: src/config.py
       hash: md5
-      md5: 7b48dda15be1bb462fe05d89f73681c3
-      size: 1963
+      md5: e0e1a86ea4c6090bb4186d2d15a4fd80
+      size: 1890
     - path: src/initial_data_import/import_raw_data.py
       hash: md5
       md5: d50a4a7299ee338dcdb4cddd5e2d31ff
@@ -21,7 +21,7 @@ stages:
       md5: b5295ddb3165cd002297e9ce18adea47
       size: 533444411
   split_data:
-    cmd: python src/initial_data_import/split_data.py --n-parts 8
+    cmd: PYTHONPATH=src python src/initial_data_import/split_data.py --n-parts 8
     deps:
     - path: data/raw/ratings.csv
       hash: md5
@@ -29,28 +29,28 @@ stages:
       size: 533444411
     - path: src/config.py
       hash: md5
-      md5: 7b48dda15be1bb462fe05d89f73681c3
-      size: 1963
+      md5: e0e1a86ea4c6090bb4186d2d15a4fd80
+      size: 1890
     - path: src/initial_data_import/split_data.py
       hash: md5
-      md5: f890d6940922cd31fdf3f8cf239e6e40
-      size: 2167
+      md5: dc671740fd571fcb2f7017d620ae9808
+      size: 2100
     params:
       params.yaml:
         split.n_parts: 8
     outs:
     - path: data/interim/ratings_parts
       hash: md5
-      md5: 410269c6cb6acc61f85277a6fe85ccc6.dir
-      size: 533444642
+      md5: be5021d738af5da1b5e42bbc17be6624.dir
+      size: 513444371
       nfiles: 8
   build_features:
-    cmd: python src/features/build_features.py --current-part 1
+    cmd: PYTHONPATH=src python src/features/build_features.py --current-part 1
     deps:
     - path: data/interim/ratings_parts
       hash: md5
-      md5: 410269c6cb6acc61f85277a6fe85ccc6.dir
-      size: 533444642
+      md5: be5021d738af5da1b5e42bbc17be6624.dir
+      size: 513444371
       nfiles: 8
     - path: data/raw/movies.csv
       hash: md5
@@ -58,36 +58,34 @@ stages:
       size: 1397542
     - path: src/config.py
       hash: md5
-      md5: 7b48dda15be1bb462fe05d89f73681c3
-      size: 1963
+      md5: e0e1a86ea4c6090bb4186d2d15a4fd80
+      size: 1890
     - path: src/features/build_features.py
       hash: md5
-      md5: 64015f3c714e76f5364b1772e7d8e511
-      size: 3525
+      md5: be1d4f252595921bd665918a3d3493f8
+      size: 3408
     params:
       params.yaml:
         split.current_part: 1
     outs:
     - path: data/processed/movie_matrix.csv
       hash: md5
-      md5: 1554692a2965d448a2f3ae4e523abd12
-      size: 1279736
+      md5: 39e91271c61c85ecdb840711c9936641
+      size: 1252457
     - path: data/processed/user_matrix.csv
       hash: md5
-      md5: 390fcb7ce6edb5721dc8729d6d7ea613
-      size: 11242264
+      md5: dfcb7d739174ab52ccd79137e4a83dfd
+      size: 11205348
   ingest:
-    cmd: python -c "from pathlib import Path; import shutil; target = 
-      Path('data/ingested'); (target / 'ratings_parts').mkdir(parents=True, 
-      exist_ok=True); shutil.copy2('data/raw/movies.csv', target / 
-      'movies.csv'); [shutil.copy2( Path('data/interim/ratings_parts') / 
-      f'ratings_{i:02d}.csv', target / 'ratings_parts' / f'ratings_{i:02d}.csv')
-      for i in range(1, 1 + 1)]"
+    cmd: mkdir -p data/ingested/ratings_parts && cp data/raw/movies.csv 
+      data/ingested/ && for i in $(seq -f %02g 1 1); do cp 
+      data/interim/ratings_parts/ratings_$i.csv data/ingested/ratings_parts/; 
+      done
     deps:
     - path: data/interim/ratings_parts
       hash: md5
-      md5: 410269c6cb6acc61f85277a6fe85ccc6.dir
-      size: 533444642
+      md5: be5021d738af5da1b5e42bbc17be6624.dir
+      size: 513444371
       nfiles: 8
     - path: data/raw/movies.csv
       hash: md5
@@ -99,6 +97,6 @@ stages:
     outs:
     - path: data/ingested
       hash: md5
-      md5: f9bc5cc9cb464033b5976b7910037b09.dir
-      size: 64399271
+      md5: f3ab13570081e79cbfe50179fde83acd.dir
+      size: 61899238
       nfiles: 2

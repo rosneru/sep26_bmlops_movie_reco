@@ -1,4 +1,4 @@
-.PHONY: run-dcs test-dcs-part test-dcs-no-body test-dcs-invalid \
+.PHONY: run-dcs test-dcs-part test-dcs-next test-dcs-no-body test-dcs-invalid \
 	run-api run-api-container test-api start-project stop-project train
 
 # Targets that need the secrets (e.g. DAGSHUB_TOKEN) depend on this file.
@@ -22,6 +22,12 @@ test-dcs-part:
 	curl -i -X POST localhost:8001/ingest -H "Authorization: Bearer $(call token,8001,admin,admin123)" \
      -H 'Content-Type: application/json' \
      -d '{"requested_up_to": 2}'
+
+# Requests only the part after the highest one in the bucket
+test-dcs-next:
+	curl -i -X POST localhost:8001/ingest -H "Authorization: Bearer $(call token,8001,admin,admin123)" \
+     -H 'Content-Type: application/json' \
+     -d '{"next_part": true}'
 
 # Without body
 # Requests the data up to current_part from params.yaml

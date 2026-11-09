@@ -91,8 +91,9 @@ jobs:
         run: |
           docker compose run --rm --no-deps --entrypoint python \
             -e MLFLOW_TEST_TRACKING_URI=http://mlflow:5000 \
-            -v "$PWD/tests:/app/tests:ro" predict \
-            -m unittest discover -s /app/tests/prediction -v
+            -e PYTHONPATH=/app/src -e PYTHONDONTWRITEBYTECODE=1 -w /workspace \
+            -v "$PWD:/workspace:ro" predict \
+            -m unittest discover -s tests/prediction -v
 
       - name: Test prediction through Nginx
         run: |

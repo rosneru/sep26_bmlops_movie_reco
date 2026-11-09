@@ -18,8 +18,9 @@ docker compose ps -a airflow-init airflow-postgres airflow-api-server airflow-sc
 
 Expected: `airflow-init` shows `Exited (0)` and all four long-running services
 show `healthy`. Open http://localhost:8081 with your `.env` dashboard credentials.
-Starting these services does not trigger training; run `training_pipeline`
-manually from the dashboard. If initialization fails, inspect
+The `training_pipeline` DAG supports manual triggers and a daily 09:40
+Europe/Berlin schedule when unpaused. Starting services does not itself request
+a manual training run; an already-unpaused DAG can run when its schedule is due. If initialization fails, inspect
 `docker compose logs airflow-init`; new Airflow runtime services remain blocked.
 Use Compose `up` for this dependency ordering; `restart` does not replay it.
 For a new machine without local settings, follow the setup sections below.
@@ -28,6 +29,7 @@ The main `docker-compose.yml` includes `compose.airflow.yml`, which uses a local
 PostgreSQL 16. The API server provides the dashboard, the scheduler coordinates
 work with LocalExecutor, and the DAG processor parses files in `airflow/dags`.
 There is no Redis or separate Celery worker. A manual infrastructure smoke-test DAG is included; the training pipeline prepares data, registers KNN and deploys/verifies its exact version.
+The `data_ingestion` DAG uploads the next rating part to the DagsHub bucket daily at 09:00; only one team member should unpause it (see `src/data_collection_service/README.md`).
 
 ## Local settings
 
@@ -112,7 +114,8 @@ it does not reset the database. On migration failure, new runtime containers do
 not start. Existing already-running services are not automatically stopped by
 a dependency failure. `restart` or a Docker daemon restart does not replay this
 Compose startup gate; use Compose up for the ordered startup. Starting the
-infrastructure does not trigger the manual training pipeline.
+infrastructure does not request a manual training run; an unpaused training
+DAG is also eligible for its daily schedule.
 
 References:
 - https://airflow.apache.org/docs/apache-airflow/3.3.2/howto/docker-compose/index.html
@@ -141,6 +144,80 @@ docker compose restart airflow-dag-processor
 
 There is no separate pytest file for this check; use the DAG directly in the UI.
 
+## Daily 09:40 schedule and manual execution
+
+`training_pipeline` now has two execution modes using the same three tasks:
+
+- Scheduled: every day at **09:40 Europe/Berlin** (`40 9 * * *`).
+- Manual: the dashboard **Trigger** button remains available at any time.
+
+The explicit `CronTriggerTimetable` has no historical start date and uses
+`run_immediately=timedelta(0)` (zero grace period), so first activation waits for
+the next scheduled tick instead of picking up a recently missed one. `catchup=False` prevents a backlog of daily runs from the past.
+After an outage on a previously scheduled DAG, Airflow may pick up the latest
+eligible tick immediately; it does not replay every missed day. The schedule follows Berlin local time,
+including summer/winter clock changes; the dashboard may display UTC unless its
+UI timezone is changed to Europe/Berlin.
+
+This stage reads `movies.csv` and all rating parts from the **DagsHub storage bucket**.
+It does not check for new data. Each successful run,
+even with unchanged data, trains/registers a new model version and deploys it.
+Use a personal serving alias. Data-arrival detection will be added separately.
+
+### Where to change the scheduled time
+
+Edit the `schedule` argument in
+[`airflow/dags/training_pipeline.py`](dags/training_pipeline.py), inside `with DAG(...)`:
+
+```python
+schedule=CronTriggerTimetable(
+    '40 9 * * *', timezone='Europe/Berlin', run_immediately=timedelta(0)
+),
+```
+
+The five cron fields are **minute, hour, day of month, month, day of week**.
+For a daily run, change only the first two fields:
+
+| Cron expression | Daily execution time in the configured timezone |
+| --- | --- |
+| `40 9 * * *` | 09:40 (current setting) |
+| `0 12 * * *` | 12:00 noon |
+| `30 18 * * *` | 18:30 |
+
+Change `timezone='Europe/Berlin'` only if another scheduling timezone is wanted.
+The execution time is defined in the DAG, not in `.env`, `params.yaml`, or
+Compose. Changing the dashboard's display timezone does not change the schedule.
+After saving, allow the DAG processor to reload the file or restart it using the
+command below. Refresh the dashboard and check **Schedule** and **Next Run**.
+No image rebuild is required. Manual triggers remain available after a schedule
+change. If today's selected time has already passed, a newly activated schedule
+normally selects the next eligible tick; always confirm **Next Run** in the UI.
+
+### Activate and verify
+
+1. Keep Docker Desktop/Engine and the Airflow services running at the scheduled
+   time. Existing preparation, training and prediction images must be built,
+   and MLflow/API credentials and serving configuration must be valid.
+2. The DAG directory is bind-mounted: no image rebuild is needed for this Python
+   change. Allow the DAG processor to reload it, or request discovery with:
+
+```powershell
+docker compose restart airflow-dag-processor
+```
+
+3. Open http://localhost:8081. Confirm `training_pipeline` shows a daily 09:40
+   schedule, then **unpause** it. New DAGs remain paused by default; an existing
+   unpaused DAG becomes eligible automatically when this definition is loaded.
+4. Inspect the next scheduled run, accounting for the dashboard timezone.
+   At the scheduled time, expect a run of type **Scheduled**, with
+   `prepare_features -> train_knn -> deploy_predict` succeeding in order.
+5. To test the work immediately without waiting for the scheduled time, click **Trigger**.
+   Expect a run of type **Manual**; this does not replace the daily schedule.
+6. `max_active_runs=1` prevents scheduled/manual runs of this DAG from executing
+   together. A second run may wait. Do not run Compose/DVC preparation in parallel.
+7. Pause the DAG to disable automatic execution when daily retraining is not
+   wanted. Do not change the production cron to a short interval just for testing.
+
 ## Run preparation, KNN training and prediction deployment
 
 DAG: `airflow/dags/training_pipeline.py`, shown as `training_pipeline` in the UI.
@@ -148,8 +225,8 @@ It has three sequential tasks: `prepare_features -> train_knn -> deploy_predict`
 DockerOperator with `movie-reco-data-preparation:local`. The second uses a small
 DockerOperator subclass with `movie-reco-train:knn`; it resolves MLflow credentials
 only at task execution. Both create sibling containers through Docker Engine,
-not Docker Compose commands. Preparation reads `split.current_part` from the
-mounted `params.yaml`. No trigger parameter is required or used in this version.
+not Docker Compose commands. Preparation downloads all rating parts stored in
+the DagsHub bucket. No trigger parameter is required or used in this version.
 The DAG ID is `training_pipeline`, covering preparation, training and deployment.
 Historical runs under the old `data_preparation` ID remain in Airflow history;
 that old DAG is no longer defined in the source. Use only `training_pipeline` for new runs.
@@ -185,8 +262,8 @@ AIRFLOW_DOCKER_GID=0
 ```
 
 This is the host project directory as seen by Docker Engine, not the scheduler's
-`/opt/airflow` directory. Raw data, rating parts and `params.yaml` are mounted
-read-only in the preparation container; only `data/processed` is writable.
+`/opt/airflow` directory. The preparation container mounts only `data/processed`
+(writable); its inputs come from the DagsHub bucket.
 For another host/drive or Docker context, verify and adjust the path in `.env`.
 On native Linux use the absolute host project path and the Docker socket's group
 ID (obtain it with `stat -c %g /var/run/docker.sock`). The scheduler runs as the
@@ -194,11 +271,12 @@ Airflow user with this supplementary group, not as root.
 
 ### Manual verification in the dashboard
 
-1. Ensure `movies.csv` and all rating parts through `split.current_part` exist.
+1. Ensure the DagsHub bucket contains `movies.csv` and at least rating part 1
+   (uploaded by the data collection service).
 2. Open http://localhost:8081 and log in with the `.env` dashboard account.
 3. Find `training_pipeline`, unpause it, then click Trigger DAG.
 4. Wait for `prepare_features` to reach `success`.
-5. In its log, find `Data preparation passed: ratings=..., users=..., movies=..., genres=...`.
+5. In its log, find `Data preparation passed: parts=1..N, ratings=..., users=..., movies=..., genres=...`.
 6. Wait for `train_knn` to reach `success`; it runs only after preparation succeeds.
 7. In the training log, find `MLflow run ID:` and `Registry URI: models:/movie-genre-knn/<version>`.
 8. Wait for `deploy_predict` to succeed, then inspect its exact model URI in the task log.
@@ -210,10 +288,11 @@ Get-Item data/processed/user_matrix.csv, data/processed/movie_matrix.csv |
     Select-Object Name, Length, LastWriteTime
 ```
 
-The DAG has no automatic schedule, allows only one active run, and has no task
-retries. Do not also run manual Compose/DVC preparation concurrently: all paths
-write the same output files. Preparation has networking disabled. Training has
-outbound bridge networking for DagsHub and a read-only processed-data mount.
+The DAG runs daily at 09:40 Europe/Berlin and also accepts manual triggers.
+It allows only one active run and has no task retries. Do not also run manual Compose/DVC preparation concurrently: all paths
+write the same output files. Preparation has outbound bridge networking for the
+DagsHub bucket. Training has outbound bridge networking for DagsHub and a
+read-only processed-data mount.
 Each child container is removed after success or failure; stdout/stderr remains
 in the Airflow task log. A successful trigger registers a new KNN model version.
 The final task recreates the three prediction replicas with that exact version, then checks each replica and nginx. `mount_tmp_dir=False`
@@ -239,6 +318,9 @@ recreate the scheduler to update its environment:
 docker compose up -d --wait airflow-scheduler
 ```
 
+Preparation additionally needs `DAGSHUB_S3_ENDPOINT_URL` and `DAGSHUB_BUCKET`;
+`BucketPreparationOperator.execute()` passes them with `DAGSHUB_TOKEN` the same
+way to the preparation container.
 The DAG processor and API server do not receive these MLflow credentials.
 `MLflowTrainingOperator.execute()` validates them at runtime, registers the token
 with Airflow's log masker, and passes them using DockerOperator's private
@@ -448,20 +530,23 @@ For the equivalent PowerShell API requests, see
 
 This verifies `prepare_features -> train_knn -> deploy_predict` uses the default
 `all_success` dependency rule. Run it only when no other pipeline run or manual
-preparation is active, because `params.yaml` is shared by all preparation jobs.
+preparation is active, because the scheduler settings are shared by all runs.
 
-1. Note the existing `split.current_part` value in root `params.yaml`.
-2. Temporarily change only that value to `0`; leave `n_parts` unchanged:
+1. Note the existing `DAGSHUB_BUCKET` value in the root `.env`.
+2. Temporarily change only that value to a bucket that does not exist, then
+   recreate the scheduler. Do not leave it empty: Compose then rejects every
+   command, because `docker-compose.yml` requires the variable.
 
-```yaml
-split:
-  n_parts: 8
-  current_part: 0
+```dotenv
+DAGSHUB_BUCKET=no-such-bucket-fault-test
+```
+
+```powershell
+docker compose up -d --wait airflow-scheduler
 ```
 
 3. Open http://localhost:8081 and trigger a **new** `training_pipeline` run.
-   No image rebuild or container restart is required: preparation reads the
-   bind-mounted `params.yaml` on every run.
+   No image rebuild is required.
 4. Wait for the scheduler to record the final states:
 
 ```text
@@ -471,7 +556,8 @@ deploy_predict   -> upstream_failed
 ```
 
 5. Open the preparation task log. Expect
-   `current_part must be a positive integer`. The downstream tasks must not
+   `Data preparation failed: Could not list ratings_parts/: ... (404) ... Not Found`.
+   The downstream tasks must not
    start; `upstream_failed` indicates a blocked prerequisite, not an attempted
    training/deployment failure. The overall run is expected to fail.
 6. Confirm no model version was registered by this run and the prediction
@@ -484,11 +570,11 @@ Invoke-RestMethod http://localhost:8000/model -Headers @{
 }
 ```
 
-Obtain a fresh JWT using the login command above if the previous token expired. This validation error happens
+Obtain a fresh JWT using the login command above if the previous token expired. This error happens
 before processed CSVs are replaced, so existing outputs remain unchanged.
 
-7. Restore `split.current_part` to its original value immediately after the
-   test, including if the test is interrupted. Do not commit the temporary `0`.
+7. Restore `DAGSHUB_BUCKET` to its original value and recreate the scheduler
+   again immediately after the test, including if the test is interrupted.
    You may trigger a new valid run afterward; that run will train/register and
    deploy a new version normally. Keep the intentional failed run as evidence.
 
