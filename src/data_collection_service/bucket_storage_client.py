@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 import boto3
-from boto3.exceptions import S3UploadFailedError
+from boto3.exceptions import S3TransferFailedError, S3UploadFailedError
 from botocore.exceptions import BotoCoreError, ClientError
 
 
@@ -116,6 +116,26 @@ class BucketStorageClient:
             self._client.upload_file(str(path), self.bucket, key)
         except (BotoCoreError, ClientError, S3UploadFailedError) as e:
             raise StorageError(f'Could not upload {path} to {key}: {e}') from e
+
+    def download(self, key: str, path: Path) -> None:
+        """
+        Download an object from the bucket to a local file.
+
+        The file is written to a temporary name first and renamed when the
+        download is complete, so an interrupted download leaves no partial
+        file at 'path'. An existing file at 'path' is overwritten.
+
+        Raises
+        ------
+        StorageError
+            If the download fails, e.g. the object does not exist.
+        """
+        try:
+            self._client.download_file(self.bucket, key, str(path))
+        except (BotoCoreError, ClientError, S3TransferFailedError) as e:
+            raise StorageError(
+                f'Could not download {key} to {path}: {e}'
+            ) from e
 
 
 if __name__ == '__main__':
