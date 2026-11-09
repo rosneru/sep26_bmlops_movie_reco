@@ -13,7 +13,7 @@ from mlflow import MlflowClient
 from src.config import (
     MLFLOW_TRACKING_URI,
     MLFLOW_REGISTERED_MODEL_NAME,
-    MODELS_DIR,
+    PROJECT_ROOT,
 )
 
 
@@ -252,7 +252,8 @@ def persistence_snapshot(client, run_id):
 
 def test_persistence(client, run_id, stage):
     snapshot_path = (
-        MODELS_DIR
+        PROJECT_ROOT
+        / 'models'
         / 'two_tower'
         / run_id
         / 'persistence_snapshot.json'
