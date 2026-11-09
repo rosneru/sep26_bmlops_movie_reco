@@ -15,4 +15,6 @@ api.include_router(auth_router)
 
 @api.post('/ingest', dependencies=[Depends(require_admin)])
 def ingest(request: IngestRequest | None = None):
-    return ingest_up_to(request.requested_up_to if request else None)
+    if request is None:
+        return ingest_up_to(None)
+    return ingest_up_to(request.requested_up_to, next_part=request.next_part)
