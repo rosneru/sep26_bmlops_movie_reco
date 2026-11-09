@@ -13,9 +13,8 @@ def load_registered_model():
     model_type = os.getenv('PREDICT_MODEL_TYPE', 'knn').strip().lower()
     if model_type not in {'knn', 'two_tower'}:
         raise ValueError('PREDICT_MODEL_TYPE must be knn or two_tower')
-    name = os.getenv(
-        'PREDICT_MODEL_NAME', f'movie-genre-{model_type.replace("_", "-")}'
-    )
+    default_name = 'movie-genre-' + model_type.replace('_', '-')
+    name = os.getenv('PREDICT_MODEL_NAME') or default_name
     version = os.getenv('PREDICT_MODEL_VERSION', '').strip()
     mlflow.set_tracking_uri(
         os.getenv(
