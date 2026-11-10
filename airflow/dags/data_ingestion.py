@@ -1,4 +1,7 @@
-"""Upload the next rating part to the DagsHub bucket daily, to simulate arriving data."""
+"""Upload the next rating part to the DagsHub bucket once a week.
+
+This simulates newly arriving rating data.
+"""
 
 import logging
 import os
@@ -71,9 +74,12 @@ def ingest_next_part():
 with DAG(
     dag_id='data_ingestion',
     description='Upload the next rating part to the DagsHub bucket.',
-    # A successful upload triggers the training pipeline through RATING_PARTS.
+    # Every Tuesday at 09:00 Europe/Berlin. A successful upload triggers the
+    # training pipeline through RATING_PARTS.
+    # catchup=False still runs the latest missed Tuesday (e.g. after starting
+    # at 10:00), but never a backlog of several parts at once.
     schedule=CronTriggerTimetable(
-        '0 9 * * *', timezone='Europe/Berlin', run_immediately=timedelta(0)
+        '0 9 * * 2', timezone='Europe/Berlin', run_immediately=timedelta(0)
     ),
     catchup=False,
     max_active_runs=1,
