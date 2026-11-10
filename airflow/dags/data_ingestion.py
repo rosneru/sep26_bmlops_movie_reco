@@ -10,19 +10,13 @@ from datetime import timedelta
 import requests
 from airflow.exceptions import AirflowException
 from airflow.providers.standard.operators.python import PythonOperator
-from airflow.sdk import DAG, Asset
+from airflow.sdk import DAG
 from airflow.sdk.exceptions import AirflowSkipException
 from airflow.sdk.log import mask_secret
 from airflow.timetables.trigger import CronTriggerTimetable
+from rating_assets import RATING_PARTS
 
 logger = logging.getLogger(__name__)
-
-# Updated only when a new rating part was uploaded. Consumer DAGs (e.g. the
-# training pipeline) can schedule on it to run only when new data arrived.
-RATING_PARTS = Asset(
-    name='rating_parts',
-    uri='dagshub-bucket://sep26_bmlops_movie_reco/ratings_parts',
-)
 
 # Compose service name; the scheduler is in the same Compose network.
 DATA_COLLECTION_URL = 'http://data_collection:8001'
@@ -80,8 +74,8 @@ def ingest_next_part():
 with DAG(
     dag_id='data_ingestion',
     description='Upload the next rating part to the DagsHub bucket.',
-    # Every Tuesday at 09:00 Europe/Berlin, before the daily training_pipeline
-    # run at 09:40, which then picks up the new part.
+    # Every Tuesday at 09:00 Europe/Berlin. A successful upload triggers the
+    # training pipeline through RATING_PARTS.
     # catchup=False still runs the latest missed Tuesday (e.g. after starting
     # at 10:00), but never a backlog of several parts at once.
     schedule=CronTriggerTimetable(

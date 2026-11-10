@@ -1,4 +1,4 @@
-"""Prepare, train and deploy bucket data daily at 09:40 Berlin time or on manual trigger."""
+"""Prepare, train and deploy after new bucket data arrives or on manual trigger."""
 
 import json
 import os
@@ -10,9 +10,9 @@ from airflow.providers.docker.operators.docker import DockerOperator
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import DAG
 from airflow.sdk.log import mask_secret
-from airflow.timetables.trigger import CronTriggerTimetable
 from docker.types import Mount
 from prediction_deployment import deploy_prediction
+from rating_assets import RATING_PARTS
 
 # These are daemon-side paths. /opt/airflow is the scheduler's filesystem and
 # cannot be used as a bind source for a sibling container on Docker Desktop.
@@ -88,11 +88,12 @@ class MLflowTrainingOperator(DockerOperator):
 with DAG(
     dag_id='training_pipeline',
     description='Prepare data, register KNN, then deploy and verify the exact model version.',
-    # No historical start date: first activation waits for the next scheduled tick.
-    # A zero grace period avoids picking up a recently missed tick.
-    schedule=CronTriggerTimetable(
-        '40 9 * * *', timezone='Europe/Berlin', run_immediately=timedelta(0)
-    ),
+    # Previous daily schedule (requires importing CronTriggerTimetable):
+    # schedule=CronTriggerTimetable(
+    #     '40 9 * * *', timezone='Europe/Berlin', run_immediately=timedelta(0)
+    # ),
+    # Schedule training when a successful upload emits a rating_parts event.
+    schedule=[RATING_PARTS],
     catchup=False,
     max_active_runs=1,
     max_active_tasks=1,
