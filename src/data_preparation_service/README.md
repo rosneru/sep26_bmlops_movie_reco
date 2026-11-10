@@ -65,5 +65,6 @@ outputs are changed. Examples:
 
 The `prepare_features` task of the `training_pipeline` DAG runs this image (see
 `airflow/README.md`). To reach the bucket, the task must pass the three
-`DAGSHUB_*` settings and allow network access. The DAG is not adapted yet: it
-still runs the container without network and mounts the old local inputs.
+`DAGSHUB_*` settings and allow network access. The DAG passes those settings at task execution and runs the container with
+network access. The container downloads the inputs and writes the processed
+matrices to the mounted output directory.
