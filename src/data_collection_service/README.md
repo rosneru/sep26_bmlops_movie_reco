@@ -37,12 +37,15 @@ With `{"next_part": true}` only the part after the highest one in the bucket is 
 
 ## Airflow DAG `data_ingestion`
 
-Simulates the arriving data: every day at 09:00 Europe/Berlin, before the `training_pipeline` at 09:40, it calls `POST /ingest` with `{"next_part": true}`. After 8 runs all parts are uploaded; later runs are skipped (`up_to_date`).
+Simulates the arriving data: every Tuesday at 09:00 Europe/Berlin, before the daily `training_pipeline` run at 09:40, it calls `POST /ingest` with `{"next_part": true}`. After 8 runs (8 weeks) all parts are uploaded; later runs are skipped (`up_to_date`).
+
+- `catchup=False`: if the system starts after 09:00 on a Tuesday, the missed run starts right away. After a longer downtime only the latest missed Tuesday runs, so at most one part is uploaded per start. On the very first unpause no missed run is made; trigger the DAG manually if needed.
+- Start `data_collection` before Airflow. The missed run starts as soon as the scheduler is up and fails without retry if the service is not reachable.
 
 - A run that uploads a part updates the Airflow asset `rating_parts`. Skipped and failed runs do not, so DAGs scheduled on the asset only run when new data arrived.
 - No retries: if an upload succeeded but its response was lost, a retry would upload one more part.
 
-**Only one team member should unpause this DAG.** The bucket is shared, so every unpaused copy uploads a part per day and the simulation advances faster than intended. New DAGs are paused by default.
+**Only one team member should unpause this DAG.** The bucket is shared, so every unpaused copy uploads a part per week and the simulation advances faster than intended. New DAGs are paused by default.
 
 Prerequisites:
 
