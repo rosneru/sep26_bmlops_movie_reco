@@ -1,0 +1,85 @@
+<mxfile host="drawio">
+  <diagram id="data-collection-service" name="Data Collection Service">
+    <mxGraphModel dx="1400" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1360" pageHeight="540" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Groups (declared first so they are drawn behind) -->
+        <mxCell id="grp_local" value="Local data (DVC)" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;verticalAlign=top;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="200" width="220" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="grp_dcs" value="Data Collection Service · Docker · :8001" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;dashed=1;fillColor=#f0f5fc;strokeColor=#6c8ebf;verticalAlign=top;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="320" y="200" width="540" height="180" as="geometry" />
+        </mxCell>
+
+        <!-- Local data -->
+        <mxCell id="raw" value="ratings.csv&lt;br&gt;movies.csv" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#ffffff;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="70" y="250" width="160" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="parts" value="ratings_01 … ratings_08.csv" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#ffffff;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="70" y="400" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Triggers -->
+        <mxCell id="admin" value="&lt;b&gt;Admin&lt;/b&gt;&lt;br&gt;curl / Swagger UI" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="320" y="40" width="170" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="airflow" value="&lt;b&gt;Airflow DAG data_ingestion&lt;/b&gt;&lt;br&gt;every Tue 09:00" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="560" y="40" width="220" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Data Collection Service -->
+        <mxCell id="api" value="&lt;b&gt;main.py&lt;/b&gt;&lt;br&gt;POST /ingest&lt;br&gt;admin only" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="340" y="260" width="150" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="ingest" value="&lt;b&gt;ingest.py&lt;/b&gt;&lt;br&gt;ingest_up_to()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="515" y="260" width="150" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="client" value="&lt;b&gt;BucketStorageClient&lt;/b&gt;&lt;br&gt;boto3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="690" y="260" width="150" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Storage and downstream -->
+        <mxCell id="bucket" value="&lt;b&gt;DagsHub S3 bucket&lt;/b&gt;&lt;br&gt;movies.csv&lt;br&gt;ratings_parts/" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="960" y="250" width="170" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="prep" value="&lt;b&gt;Data Preparation&lt;/b&gt;&lt;br&gt;Service" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="265" width="150" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="train" value="&lt;b&gt;training_pipeline&lt;/b&gt;&lt;br&gt;DAG" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="40" width="150" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Edges -->
+        <mxCell id="e_split" value="split_data" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;labelBackgroundColor=#f5f5f5;" edge="1" parent="1" source="raw" target="parts">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_admin" value="requested_up_to = n" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.3;entryY=0;" edge="1" parent="1" source="admin" target="api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_airflow" value="next_part = true" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.8;entryY=0;" edge="1" parent="1" source="airflow" target="api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_api_ingest" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="api" target="ingest">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ingest_client" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="ingest" target="client">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_mount" value="read-only mount" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0.5;entryY=1;" edge="1" parent="1" source="parts" target="ingest">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_bucket" value="list · exists · upload" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="client" target="bucket">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_prep" value="reads" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="bucket" target="prep">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_asset" value="asset rating_parts" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="airflow" target="train">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
