@@ -11,3 +11,8 @@ scrape_configs:
       - names: ["predict"]
         type: A
         port: 8000
+
+  - job_name: node
+    static_configs:
+      - targets:
+          - node-exporter:9100
