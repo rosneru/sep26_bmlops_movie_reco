@@ -158,7 +158,7 @@
                       "spec": {
                         "editorMode": "code",
                         "expr": "sum(rate(prediction_requests_total{job=\"prediction\"}[5m]))",
-                        "legendFormat": "__auto",
+                        "legendFormat": "All prediction requests",
                         "range": true
                       },
                       "version": "v0"
@@ -171,7 +171,7 @@
               "transformations": []
             }
           },
-          "description": "",
+          "description": "Combined POST /predict request rate across replicas, including authentication failures, averaged over five minutes. Fractional requests per second are expected.",
           "id": 2,
           "links": [],
           "title": "Prediction requests per second",
@@ -188,7 +188,7 @@
                     "axisBorderShow": false,
                     "axisCenteredZero": false,
                     "axisColorMode": "text",
-                    "axisLabel": "",
+                    "axisLabel": "Requests / second",
                     "axisPlacement": "auto",
                     "barAlignment": 0,
                     "barWidthFactor": 0.6,
@@ -230,7 +230,10 @@
                         "value": 80
                       }
                     ]
-                  }
+                  },
+                  "unit": "reqps",
+                  "min": 0,
+                  "decimals": 2
                 },
                 "overrides": []
               },
@@ -288,7 +291,7 @@
               "transformations": []
             }
           },
-          "description": "",
+          "description": "Number of prediction replicas successfully scraped by Prometheus. Expected: 3. Zero is red; 1\u20132 are orange; 3 or more are green. This measures scrape availability, not recommendation quality.",
           "id": 3,
           "links": [],
           "title": "Prediction replicas up",
@@ -305,15 +308,24 @@
                     "mode": "absolute",
                     "steps": [
                       {
-                        "color": "green",
-                        "value": 0
+                        "color": "red",
+                        "value": null
                       },
                       {
-                        "color": "red",
-                        "value": 80
+                        "color": "orange",
+                        "value": 1
+                      },
+                      {
+                        "color": "green",
+                        "value": 3
                       }
                     ]
-                  }
+                  },
+                  "custom": {},
+                  "unit": "short",
+                  "min": 0,
+                  "decimals": 0,
+                  "noValue": "No data"
                 },
                 "overrides": []
               },
@@ -390,7 +402,7 @@
                     "axisBorderShow": false,
                     "axisCenteredZero": false,
                     "axisColorMode": "text",
-                    "axisLabel": "",
+                    "axisLabel": "Requests",
                     "axisPlacement": "auto",
                     "barAlignment": 0,
                     "barWidthFactor": 0.6,
@@ -432,7 +444,10 @@
                         "value": 80
                       }
                     ]
-                  }
+                  },
+                  "unit": "short",
+                  "min": 0,
+                  "decimals": 0
                 },
                 "overrides": []
               },
@@ -505,7 +520,7 @@
                     "axisBorderShow": false,
                     "axisCenteredZero": false,
                     "axisColorMode": "text",
-                    "axisLabel": "",
+                    "axisLabel": "Response time",
                     "axisPlacement": "auto",
                     "barAlignment": 0,
                     "barWidthFactor": 0.6,
@@ -548,7 +563,8 @@
                       }
                     ]
                   },
-                  "unit": "s"
+                  "unit": "s",
+                  "min": 0
                 },
                 "overrides": []
               },
@@ -603,7 +619,7 @@
               "transformations": []
             }
           },
-          "description": "Login and token results across the prediction replicas.",
+          "description": "Estimated authentication event count in each rolling five-minute window, summed across prediction replicas. Prometheus increase() extrapolates counts; displayed values are rounded to whole events. Missing-token requests are counted in prediction HTTP status metrics, not here.",
           "id": 6,
           "links": [],
           "title": "Authentication events in the last 5 minutes",
@@ -620,7 +636,7 @@
                     "axisBorderShow": false,
                     "axisCenteredZero": false,
                     "axisColorMode": "text",
-                    "axisLabel": "",
+                    "axisLabel": "Events / 5 min",
                     "axisPlacement": "auto",
                     "barAlignment": 0,
                     "barWidthFactor": 0.6,
@@ -662,7 +678,10 @@
                         "value": 80
                       }
                     ]
-                  }
+                  },
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0
                 },
                 "overrides": []
               },
@@ -704,7 +723,7 @@
                       "spec": {
                         "editorMode": "code",
                         "expr": "100 * (1 - avg by (instance) (\r\n  rate(node_cpu_seconds_total{job=\"node\", mode=\"idle\"}[5m])\r\n))",
-                        "legendFormat": "__auto",
+                        "legendFormat": "Docker/WSL",
                         "range": true
                       },
                       "version": "v0"
@@ -717,10 +736,10 @@
               "transformations": []
             }
           },
-          "description": "",
+          "description": "CPU non-idle time across the node-exporter Docker/WSL environment, averaged across CPU cores over five minutes. Not individual container or Windows CPU usage.",
           "id": 7,
           "links": [],
-          "title": "Docker CPU Usage (%)",
+          "title": "Docker/WSL CPU usage (%)",
           "vizConfig": {
             "group": "timeseries",
             "kind": "VizConfig",
@@ -734,7 +753,7 @@
                     "axisBorderShow": false,
                     "axisCenteredZero": false,
                     "axisColorMode": "text",
-                    "axisLabel": "",
+                    "axisLabel": "CPU usage (%)",
                     "axisPlacement": "auto",
                     "barAlignment": 0,
                     "barWidthFactor": 0.6,
@@ -776,7 +795,11 @@
                         "value": 80
                       }
                     ]
-                  }
+                  },
+                  "unit": "percent",
+                  "min": 0,
+                  "max": 100,
+                  "decimals": 1
                 },
                 "overrides": []
               },
@@ -818,7 +841,7 @@
                       "spec": {
                         "editorMode": "code",
                         "expr": "100 * (1 -\r\n  node_memory_MemAvailable_bytes{job=\"node\"}\r\n  / node_memory_MemTotal_bytes{job=\"node\"}\r\n)",
-                        "legendFormat": "__auto",
+                        "legendFormat": "Docker/WSL",
                         "range": true
                       },
                       "version": "v0"
@@ -831,10 +854,10 @@
               "transformations": []
             }
           },
-          "description": "",
+          "description": "Memory unavailable as MemAvailable, relative to MemTotal, in the node-exporter Docker/WSL environment. Not individual container or Windows memory usage.",
           "id": 8,
           "links": [],
-          "title": "Docker RAM Usage (%)",
+          "title": "Docker/WSL memory usage (%)",
           "vizConfig": {
             "group": "timeseries",
             "kind": "VizConfig",
@@ -848,7 +871,7 @@
                     "axisBorderShow": false,
                     "axisCenteredZero": false,
                     "axisColorMode": "text",
-                    "axisLabel": "",
+                    "axisLabel": "Memory usage (%)",
                     "axisPlacement": "auto",
                     "barAlignment": 0,
                     "barWidthFactor": 0.6,
@@ -890,7 +913,11 @@
                         "value": 80
                       }
                     ]
-                  }
+                  },
+                  "unit": "percent",
+                  "min": 0,
+                  "max": 100,
+                  "decimals": 1
                 },
                 "overrides": []
               },
@@ -931,8 +958,8 @@
                       "kind": "DataQuery",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "100 * (1 -\r\n  node_filesystem_avail_bytes{job=\"node\", mountpoint=~\"/mnt/host/[a-z]\"}\r\n  / (node_filesystem_size_bytes{job=\"node\", mountpoint=~\"/mnt/host/[a-z]\"} > 0)\r\n)",
-                        "legendFormat": "__auto",
+                        "expr": "100 * (1 - node_filesystem_avail_bytes{job=\"node\", mountpoint=\"/var/lib\"} / (node_filesystem_size_bytes{job=\"node\", mountpoint=\"/var/lib\"} > 0))",
+                        "legendFormat": "Docker/WSL /var/lib",
                         "range": true
                       },
                       "version": "v0"
@@ -945,10 +972,10 @@
               "transformations": []
             }
           },
-          "description": "",
+          "description": "Filesystem capacity unavailable to normal users, as a percentage, for /var/lib reported by node-exporter in the Docker/WSL environment. This is not Windows drive usage.",
           "id": 9,
           "links": [],
-          "title": "Disk Usage by Drive (%)",
+          "title": "Docker/WSL disk usage (%)",
           "vizConfig": {
             "group": "timeseries",
             "kind": "VizConfig",
@@ -962,7 +989,7 @@
                     "axisBorderShow": false,
                     "axisCenteredZero": false,
                     "axisColorMode": "text",
-                    "axisLabel": "",
+                    "axisLabel": "Disk usage (%)",
                     "axisPlacement": "auto",
                     "barAlignment": 0,
                     "barWidthFactor": 0.6,
@@ -1004,7 +1031,11 @@
                         "value": 80
                       }
                     ]
-                  }
+                  },
+                  "unit": "percent",
+                  "min": 0,
+                  "max": 100,
+                  "decimals": 1
                 },
                 "overrides": []
               },
