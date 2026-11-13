@@ -385,10 +385,10 @@
               "transformations": []
             }
           },
-          "description": "Cumulative handler calls since each replica started.",
+          "description": "Cumulative POST /predict requests reaching the handler, shown per replica since that replica started. Excludes authentication and input-validation rejections before the handler; includes errors raised inside the handler. Counters reset on restart.",
           "id": 4,
           "links": [],
-          "title": "Requests reaching the prediction handler per replica",
+          "title": "Prediction handler requests since startup",
           "vizConfig": {
             "group": "timeseries",
             "kind": "VizConfig",
