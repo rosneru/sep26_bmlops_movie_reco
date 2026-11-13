@@ -26,8 +26,13 @@ def main():
     parser.add_argument('--username', default='alice')
     parser.add_argument('--authenticated', type=int, default=30)
     parser.add_argument('--unauthenticated', type=int, default=10)
+    parser.add_argument('--failed-logins', type=int, default=10)
+    parser.add_argument('--invalid-tokens', type=int, default=10)
     args = parser.parse_args()
-    if args.authenticated < 0 or args.unauthenticated < 0:
+    if any(count < 0 for count in (
+        args.authenticated, args.unauthenticated,
+        args.failed_logins, args.invalid_tokens,
+    )):
         parser.error('Request counts must be zero or greater.')
 
     headers = {'Content-Type': 'application/json'}
@@ -45,19 +50,33 @@ def main():
         token = json.loads(response)['access_token']
         authenticated_headers['Authorization'] = f'Bearer {token}'
 
-    # Both batches send the same prediction. Only the authorization header changes.
+    # Missing tokens count as HTTP 401, but do not emit an auth_events_total event.
     prediction = json.dumps({'user_ids': [args.user_id], 'seed': 42}).encode()
+    bad_login = urlencode({
+        'username': 'nonexistent-demo-user',
+        'password': 'deliberately-wrong-password',
+    }).encode()
+    invalid_headers = {
+        **headers,
+        'Authorization': 'Bearer deliberately-invalid-token',
+    }
     batches = [
-        ('With a token', args.authenticated, authenticated_headers),
-        ('Without a token', args.unauthenticated, headers),
+        ('With a token', args.authenticated, '/predict', prediction, authenticated_headers),
+        ('Without a token', args.unauthenticated, '/predict', prediction, headers),
+        ('Failed login', args.failed_logins, '/token', bad_login,
+         {'Content-Type': 'application/x-www-form-urlencoded'}),
+        ('Invalid token', args.invalid_tokens, '/predict', prediction, invalid_headers),
     ]
-    for label, count, request_headers in batches:
+    for label, count, path, body, request_headers in batches:
         statuses = Counter()
         for _ in range(count):
-            status, _ = post('/predict', prediction, request_headers)
+            status, _ = post(path, body, request_headers)
             statuses[status] += 1
         for status, total in sorted(statuses.items()):
             print(f'{label:16} {total:3} x HTTP {status}')
+
+    print('Grafana: allow at least 15 seconds for a scrape and refresh the dashboard.')
+    print('For newly created auth event lines, repeat after 30 seconds to show increases.')
 
 
 if __name__ == '__main__':
